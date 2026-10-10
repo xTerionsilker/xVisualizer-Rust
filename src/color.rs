@@ -1,6 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 
-use crate::ui::{ChoiceMenu, MenuOutcome, render_choice};
+use crate::ui::{ChoiceMenu, MenuOutcome, choice_key, render_choice};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorMode {
@@ -108,40 +108,24 @@ impl ColorMenu {
         self.open = true;
     }
 
-    pub fn step(&mut self, dir: i32) {
-        let n = ColorMode::all().len() as i32;
-        self.selected = (self.selected as i32 + dir).rem_euclid(n) as usize;
-    }
-
     pub fn cycle(&mut self) {
         self.current = self.current.next();
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> MenuOutcome {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => self.step(-1),
-            KeyCode::Left | KeyCode::Char('h') => self.step(-1),
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.step(1),
-            KeyCode::Right | KeyCode::Char('l') => self.step(1),
-            KeyCode::Char(c) if ('1'..='9').contains(&c) => {
-                let idx = (c as usize) - ('1' as usize);
-                if idx < ColorMode::all().len() {
-                    self.selected = idx;
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+        match choice_key(key, &mut self.selected, ColorMode::all().len()) {
+            MenuOutcome::Confirmed => {
                 self.current = ColorMode::all()[self.selected];
                 self.open = false;
-                return MenuOutcome::Confirmed;
+                MenuOutcome::Confirmed
             }
-            KeyCode::Esc => {
+            MenuOutcome::Cancelled => {
                 self.selected = self.current.index();
                 self.open = false;
-                return MenuOutcome::Cancelled;
+                MenuOutcome::Cancelled
             }
-            _ => {}
+            MenuOutcome::StillOpen => MenuOutcome::StillOpen,
         }
-        MenuOutcome::StillOpen
     }
 }
 

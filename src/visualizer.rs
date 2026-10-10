@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use crate::color::{ColorMode, bar_color};
 use crate::layout::{LayoutMode, display_count, spectrum_index};
-use crate::util::truncate_chars;
+use crate::util::{push_spaces, truncate_chars};
 
 const FOOTER_HEIGHT: usize = 2;
 
@@ -152,23 +152,29 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
         // Clear leftovers when shrinking to a narrower frame.
         frame.push_str("\x1b[K\r\n");
     }
-    let status = match v.notice {
-        Some(msg) => truncate_chars(msg, 60).to_string(),
-        None if v.paused => format!(
-            "Paused - Space to resume  |  {}  |  {:.1}x  |  {}",
-            v.layout.name(),
-            v.gain,
-            v.color_mode.name()
-        ),
+    // Footer without per-frame String allocation: the only formatting is
+    // the tiny gain number; status width is counted from parts.
+    let gain_text = format!("{:.1}", v.gain);
+    let status_w = match v.notice {
+        Some(msg) => truncate_chars(msg, 60).chars().count(),
+        None if v.paused => {
+            "Paused - Space to resume  |  ".chars().count()
+                + v.layout.name().chars().count()
+                + "  |  ".chars().count()
+                + gain_text.chars().count()
+                + "x  |  ".chars().count()
+                + v.color_mode.name().chars().count()
+        }
         None => {
-            let short = truncate_chars(v.source, 24);
-            format!(
-                "{short}  |  {}  |  {}  |  {:.1}x  |  {}",
-                v.theme_name,
-                v.layout.name(),
-                v.gain,
-                v.color_mode.name()
-            )
+            truncate_chars(v.source, 24).chars().count()
+                + "  |  ".chars().count()
+                + v.theme_name.chars().count()
+                + "  |  ".chars().count()
+                + v.layout.name().chars().count()
+                + "  |  ".chars().count()
+                + gain_text.chars().count()
+                + "x  |  ".chars().count()
+                + v.color_mode.name().chars().count()
         }
     };
     let keys = "T-themes S-source Space-pause L-layout +/-gain G-reset C-color ?-help Q-quit";
@@ -176,16 +182,34 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
     // footer line: write status directly, newline only before the keys line.
     // A leading `\r\n` before both lines would make the frame one line
     // taller than the screen and scroll on every frame (duplicated rows).
-    for (idx, line) in [status.as_str(), keys].iter().enumerate() {
-        let w = line.chars().count();
-        let x = v.cols.saturating_sub(w) / 2;
-        if idx == 1 {
-            frame.push_str("\r\n");
+    push_spaces(frame, v.cols.saturating_sub(status_w) / 2);
+    match v.notice {
+        Some(msg) => frame.push_str(truncate_chars(msg, 60)),
+        None if v.paused => {
+            frame.push_str("Paused - Space to resume  |  ");
+            frame.push_str(v.layout.name());
+            frame.push_str("  |  ");
+            frame.push_str(&gain_text);
+            frame.push_str("x  |  ");
+            frame.push_str(v.color_mode.name());
         }
-        frame.push_str(&" ".repeat(x));
-        frame.push_str(line);
-        frame.push_str("\x1b[K");
+        None => {
+            frame.push_str(truncate_chars(v.source, 24));
+            frame.push_str("  |  ");
+            frame.push_str(v.theme_name);
+            frame.push_str("  |  ");
+            frame.push_str(v.layout.name());
+            frame.push_str("  |  ");
+            frame.push_str(&gain_text);
+            frame.push_str("x  |  ");
+            frame.push_str(v.color_mode.name());
+        }
     }
+    frame.push_str("\x1b[K\r\n");
+    let kw = keys.chars().count();
+    push_spaces(frame, v.cols.saturating_sub(kw) / 2);
+    frame.push_str(keys);
+    frame.push_str("\x1b[K");
 }
 
 fn push_gap(frame: &mut String, gap_width: usize) {

@@ -1,12 +1,14 @@
 use std::fmt::Write as _;
 
+use crossterm::event::{KeyCode, KeyEvent};
+
 use crate::color::ColorMenu;
 use crate::layout::LayoutMenu;
 use crate::source::PlaybackStream;
 use crate::source::SourceMenu;
 use crate::theme::Theme;
 use crate::theme::ThemeMenu;
-use crate::util::center_x;
+use crate::util::{center_x, push_spaces};
 
 // Composition root for screen state: each menu owns its own
 // state in its file, `main` owns this struct.
@@ -36,6 +38,34 @@ pub enum MenuOutcome {
     StillOpen,
     Confirmed,
     Cancelled,
+}
+
+// Shared selection logic for the option-list menus. Each menu keeps its
+// own state and applies confirm/cancel itself; only navigation lives here.
+pub(crate) fn step_wrap(selected: &mut usize, dir: i32, len: usize) {
+    if len == 0 {
+        return;
+    }
+    *selected = (*selected as i32 + dir).rem_euclid(len as i32) as usize;
+}
+
+pub(crate) fn choice_key(key: KeyEvent, selected: &mut usize, len: usize) -> MenuOutcome {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => step_wrap(selected, -1, len),
+        KeyCode::Left | KeyCode::Char('h') => step_wrap(selected, -1, len),
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => step_wrap(selected, 1, len),
+        KeyCode::Right | KeyCode::Char('l') => step_wrap(selected, 1, len),
+        KeyCode::Char(c) if ('1'..='9').contains(&c) => {
+            let idx = (c as usize) - ('1' as usize);
+            if idx < len {
+                *selected = idx;
+            }
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => return MenuOutcome::Confirmed,
+        KeyCode::Esc => return MenuOutcome::Cancelled,
+        _ => {}
+    }
+    MenuOutcome::StillOpen
 }
 
 impl UiState {
@@ -84,7 +114,7 @@ pub(crate) fn render_choice(
         frame.push_str("\x1b[K\r\n");
     }
     let tx = center_x(cols, menu.title.chars().count());
-    frame.push_str(&" ".repeat(tx));
+    push_spaces(frame, tx);
     if use_color {
         frame.push_str("\x1b[1;36m");
     }
@@ -96,7 +126,7 @@ pub(crate) fn render_choice(
 
     let hint_top = "Up/Down or Left/Right - select  |  Enter - apply";
     let hx = center_x(cols, hint_top.chars().count());
-    frame.push_str(&" ".repeat(hx));
+    push_spaces(frame, hx);
     if use_color {
         frame.push_str("\x1b[90m");
     }
@@ -110,10 +140,9 @@ pub(crate) fn render_choice(
         let is_sel = idx == menu.selected;
         let marker = if is_sel { "> " } else { "  " };
         let cur_tag = if *is_cur { "  (current)" } else { "" };
-        let line = format!("{marker}{label}{cur_tag}");
-        let w = line.chars().count();
+        let w = marker.chars().count() + label.chars().count() + cur_tag.chars().count();
         let x = center_x(cols, w);
-        frame.push_str(&" ".repeat(x));
+        push_spaces(frame, x);
         if is_sel {
             if use_color {
                 frame.push_str("\x1b[7m");
@@ -121,7 +150,9 @@ pub(crate) fn render_choice(
                 frame.push_str("> ");
             }
         }
-        frame.push_str(&line);
+        frame.push_str(marker);
+        frame.push_str(label);
+        frame.push_str(cur_tag);
         if is_sel && use_color {
             frame.push_str("\x1b[0m");
         }
@@ -129,16 +160,14 @@ pub(crate) fn render_choice(
     }
 
     frame.push_str("\x1b[K\r\n");
-    let hint_bot = format!(
-        "{}  |  Enter - next  |  Esc - skip setup  |  Q - quit",
-        menu.quick_hint
-    );
-    let bx = center_x(cols, hint_bot.chars().count());
-    frame.push_str(&" ".repeat(bx));
+    let mid = "  |  Enter - next  |  Esc - skip setup  |  Q - quit";
+    let bx = center_x(cols, menu.quick_hint.chars().count() + mid.chars().count());
+    push_spaces(frame, bx);
     if use_color {
         frame.push_str("\x1b[90m");
     }
-    frame.push_str(&hint_bot);
+    frame.push_str(menu.quick_hint);
+    frame.push_str(mid);
     if use_color {
         frame.push_str("\x1b[0m");
     }

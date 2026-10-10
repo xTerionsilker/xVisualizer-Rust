@@ -1,11 +1,11 @@
 use std::fmt::Write as _;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 
-use crate::ui::MenuOutcome;
-use crate::util::center_x;
+use crate::ui::{MenuOutcome, choice_key, step_wrap};
+use crate::util::{center_x, push_spaces};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Theme {
     Classic,
     Solid,
@@ -86,8 +86,7 @@ impl ThemeMenu {
     }
 
     pub fn step(&mut self, dir: i32) {
-        let n = Theme::all().len() as i32;
-        self.selected = (self.selected as i32 + dir).rem_euclid(n) as usize;
+        step_wrap(&mut self.selected, dir, Theme::all().len());
     }
 
     pub fn quick(&mut self, idx: usize) {
@@ -97,30 +96,19 @@ impl ThemeMenu {
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> MenuOutcome {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => self.step(-1),
-            KeyCode::Left | KeyCode::Char('h') => self.step(-1),
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.step(1),
-            KeyCode::Right | KeyCode::Char('l') => self.step(1),
-            KeyCode::Char(c) if ('1'..='9').contains(&c) => {
-                let idx = (c as usize) - ('1' as usize);
-                if idx < Theme::all().len() {
-                    self.selected = idx;
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+        match choice_key(key, &mut self.selected, Theme::all().len()) {
+            MenuOutcome::Confirmed => {
                 self.current = Theme::all()[self.selected];
                 self.open = false;
-                return MenuOutcome::Confirmed;
+                MenuOutcome::Confirmed
             }
-            KeyCode::Esc => {
+            MenuOutcome::Cancelled => {
                 self.selected = self.current.index();
                 self.open = false;
-                return MenuOutcome::Cancelled;
+                MenuOutcome::Cancelled
             }
-            _ => {}
+            MenuOutcome::StillOpen => MenuOutcome::StillOpen,
         }
-        MenuOutcome::StillOpen
     }
 }
 
@@ -146,7 +134,7 @@ pub fn render(
         "Select theme"
     };
     let tx = center_x(cols, title.chars().count());
-    frame.push_str(&" ".repeat(tx));
+    push_spaces(frame, tx);
     if use_color {
         frame.push_str("\x1b[1;36m");
     }
@@ -158,7 +146,7 @@ pub fn render(
 
     let hint_top = "Up/Down or Left/Right - select  |  Enter - apply";
     let hx = center_x(cols, hint_top.chars().count());
-    frame.push_str(&" ".repeat(hx));
+    push_spaces(frame, hx);
     if use_color {
         frame.push_str("\x1b[90m");
     }
@@ -177,14 +165,19 @@ pub fn render(
         };
         let marker = if is_sel { "> " } else { "  " };
         let cur_tag = if is_cur { "  (current)" } else { "" };
-        let line = format!(
-            "{marker}{} - {}  [{preview}]{cur_tag}",
-            th.name(),
-            th.desc()
-        );
-        let w = line.chars().count();
+        let mid_a = " - ";
+        let mid_b = "  [";
+        let end_b = "]";
+        let w = marker.chars().count()
+            + th.name().chars().count()
+            + mid_a.chars().count()
+            + th.desc().chars().count()
+            + mid_b.chars().count()
+            + preview.chars().count()
+            + end_b.chars().count()
+            + cur_tag.chars().count();
         let x = center_x(cols, w);
-        frame.push_str(&" ".repeat(x));
+        push_spaces(frame, x);
         if is_sel {
             if use_color {
                 frame.push_str("\x1b[7m");
@@ -192,7 +185,14 @@ pub fn render(
                 frame.push_str("> ");
             }
         }
-        frame.push_str(&line);
+        frame.push_str(marker);
+        frame.push_str(th.name());
+        frame.push_str(mid_a);
+        frame.push_str(th.desc());
+        frame.push_str(mid_b);
+        frame.push_str(preview);
+        frame.push_str(end_b);
+        frame.push_str(cur_tag);
         if is_sel && use_color {
             frame.push_str("\x1b[0m");
         }
@@ -206,7 +206,7 @@ pub fn render(
         "1 / 2 - quick select  |  Esc - back  |  Q - quit"
     };
     let bx = center_x(cols, hint_bot.chars().count());
-    frame.push_str(&" ".repeat(bx));
+    push_spaces(frame, bx);
     if use_color {
         frame.push_str("\x1b[90m");
     }

@@ -35,13 +35,32 @@ pub fn print_help() {
 }
 
 pub fn parse_args() -> Args {
-    parse_from(std::env::args().skip(1))
+    // Honor https://no-color.org/ in addition to the flag.
+    let no_color_env = std::env::var_os("NO_COLOR").is_some();
+    match parse_from(std::env::args().skip(1), no_color_env) {
+        Ok(ParseOutcome::Args(args)) => args,
+        Ok(ParseOutcome::Help) => {
+            print_help();
+            std::process::exit(0);
+        }
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
+    }
 }
 
-fn parse_from(it: impl Iterator<Item = String>) -> Args {
+pub enum ParseOutcome {
+    Args(Args),
+    Help,
+}
+
+pub(crate) fn parse_from(
+    it: impl Iterator<Item = String>,
+    no_color_env: bool,
+) -> Result<ParseOutcome, String> {
     let mut device: Option<String> = None;
-    // Honor https://no-color.org/ in addition to the flag.
-    let mut no_color = std::env::var_os("NO_COLOR").is_some();
+    let mut no_color = no_color_env;
     let mut theme: Option<Theme> = None;
     let mut it = it.peekable();
     while let Some(a) = it.next() {
@@ -53,40 +72,74 @@ fn parse_from(it: impl Iterator<Item = String>) -> Args {
             _ => (a.clone(), None),
         };
         match flag.as_str() {
-            "-h" | "--help" => {
-                print_help();
-                std::process::exit(0);
-            }
+            "-h" | "--help" => return Ok(ParseOutcome::Help),
             "-d" | "--device" => {
-                let v = inline.or_else(|| it.next()).unwrap_or_else(|| {
-                    eprintln!("error: {flag} requires a device name");
-                    std::process::exit(2);
-                });
+                let Some(v) = inline.or_else(|| it.next()) else {
+                    return Err(format!("error: {flag} requires a device name"));
+                };
                 device = Some(v);
             }
             "-t" | "--theme" => {
-                let v = inline.or_else(|| it.next()).unwrap_or_else(|| {
-                    eprintln!("error: {flag} requires classic|solid");
-                    std::process::exit(2);
-                });
+                let Some(v) = inline.or_else(|| it.next()) else {
+                    return Err(format!("error: {flag} requires classic|solid"));
+                };
                 match Theme::from_str(&v) {
                     Some(t) => theme = Some(t),
                     None => {
-                        eprintln!("error: unknown theme '{v}' (classic|solid)");
-                        std::process::exit(2);
+                        return Err(format!("error: unknown theme '{v}' (classic|solid)"));
                     }
                 }
             }
             "--no-color" => no_color = true,
             _ => {
-                eprintln!("error: unknown flag '{a}'. See xvisualizer --help");
-                std::process::exit(2);
+                return Err(format!("error: unknown flag '{a}'. See xvisualizer --help"));
             }
         }
     }
-    Args {
+    Ok(ParseOutcome::Args(Args {
         device,
         no_color,
         theme,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Theme;
+
+    fn args_of(flags: &[&str], env: bool) -> Result<Args, String> {
+        let it = flags.iter().map(|s| s.to_string());
+        match parse_from(it, env)? {
+            ParseOutcome::Args(a) => Ok(a),
+            ParseOutcome::Help => panic!("unexpected help"),
+        }
+    }
+
+    #[test]
+    fn parses_device_and_theme_forms() {
+        let a = args_of(&["--device", "mic", "-t", "solid"], false).unwrap();
+        assert_eq!(a.device.as_deref(), Some("mic"));
+        assert_eq!(a.theme, Some(Theme::Solid));
+        let b = args_of(&["--device=mic", "--theme=1"], false).unwrap();
+        assert_eq!(b.device.as_deref(), Some("mic"));
+        assert_eq!(b.theme, Some(Theme::Classic));
+    }
+
+    #[test]
+    fn rejects_unknown_flag_theme_and_missing_value() {
+        assert!(args_of(&["--nope"], false).is_err());
+        assert!(args_of(&["-t", "neon"], false).is_err());
+        assert!(args_of(&["-d"], false).is_err());
+    }
+
+    #[test]
+    fn help_and_no_color_env() {
+        let it = ["-h".to_string()].into_iter();
+        assert!(matches!(parse_from(it, false), Ok(ParseOutcome::Help)));
+        let a = args_of(&[], true).unwrap();
+        assert!(a.no_color);
+        let b = args_of(&["--no-color"], false).unwrap();
+        assert!(b.no_color);
     }
 }

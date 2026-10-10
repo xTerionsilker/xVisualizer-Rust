@@ -46,6 +46,12 @@ pub fn center_x(cols: usize, width: usize) -> usize {
     cols.saturating_sub(width) / 2
 }
 
+pub fn push_spaces(frame: &mut String, n: usize) {
+    for _ in 0..n {
+        frame.push(' ');
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

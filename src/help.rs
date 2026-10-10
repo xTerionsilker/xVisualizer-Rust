@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::util::center_x;
+use crate::util::{center_x, push_spaces};
 
 pub fn handle_key(open: &mut bool, key: KeyEvent) {
     match key.code {
@@ -59,7 +59,7 @@ pub fn render_help(frame: &mut String, cols: usize, rows: usize, use_color: bool
         } else {
             x
         };
-        frame.push_str(&" ".repeat(pad));
+        push_spaces(frame, pad);
         if is_title && use_color {
             frame.push_str("\x1b[1;36m");
         }

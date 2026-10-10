@@ -86,36 +86,32 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Action {
     handle_visualizer_key(state, key)
 }
 
-fn open_theme(state: &mut UiState) {
-    state.theme.open();
+fn close_all(state: &mut UiState) {
+    state.theme.open = false;
     state.source.open = false;
     state.color.open = false;
     state.layout.open = false;
     state.in_help = false;
+}
+
+fn open_theme(state: &mut UiState) {
+    close_all(state);
+    state.theme.open();
 }
 
 fn open_source(state: &mut UiState) {
+    close_all(state);
     state.source.open();
-    state.theme.open = false;
-    state.color.open = false;
-    state.layout.open = false;
-    state.in_help = false;
 }
 
 fn open_color(state: &mut UiState) {
+    close_all(state);
     state.color.open();
-    state.theme.open = false;
-    state.source.open = false;
-    state.layout.open = false;
-    state.in_help = false;
 }
 
 fn open_layout(state: &mut UiState) {
+    close_all(state);
     state.layout.open();
-    state.theme.open = false;
-    state.source.open = false;
-    state.color.open = false;
-    state.in_help = false;
 }
 
 fn handle_visualizer_key(state: &mut UiState, key: KeyEvent) -> Action {
