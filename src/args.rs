@@ -1,9 +1,16 @@
+use crate::color::ColorMode;
+use crate::layout::LayoutMode;
 use crate::theme::Theme;
 
 pub struct Args {
     pub device: Option<String>,
     pub no_color: bool,
     pub theme: Option<Theme>,
+    pub color: Option<ColorMode>,
+    pub layout: Option<LayoutMode>,
+    pub gain: Option<f32>,
+    pub source: Option<String>,
+    pub no_setup: bool,
 }
 
 pub fn print_help() {
@@ -16,8 +23,16 @@ pub fn print_help() {
         "  -d, --device NAME Pulse source (default: auto-detected monitor of the default sink)"
     );
     println!("  -t, --theme NAME  start theme: classic | solid (default: classic)");
+    println!("      --color NAME  start color: height | frequency | mono");
+    println!("      --layout NAME start layout: symmetric | left-right");
+    println!("  -g, --gain X      start sensitivity 0.2-8.0 (default: 1.0)");
+    println!("      --source NAME start source: system or app name (default: system)");
+    println!("      --no-setup    skip the startup setup wizard");
     println!("      --no-color    disable ANSI colors");
     println!("  -h, --help        show this help");
+    println!();
+    println!("Settings are saved to ~/.config/xvisualizer/config (or $XDG_CONFIG_HOME)");
+    println!("and reused on the next run. CLI flags override the saved values.");
     println!();
     println!("Keys (in program):");
     println!("  Up/Down or Left/Right  choose theme in the menu (also opens it)");
@@ -62,11 +77,16 @@ pub(crate) fn parse_from(
     let mut device: Option<String> = None;
     let mut no_color = no_color_env;
     let mut theme: Option<Theme> = None;
+    let mut color: Option<ColorMode> = None;
+    let mut layout: Option<LayoutMode> = None;
+    let mut gain: Option<f32> = None;
+    let mut source: Option<String> = None;
+    let mut no_setup = false;
     let mut it = it.peekable();
     while let Some(a) = it.next() {
         // Support both `--flag value`, `--flag=value` and `-d value`, `-d=value`.
         let (flag, inline) = match a.split_once('=') {
-            Some((f, v)) if f.starts_with("--") || f == "-d" || f == "-t" => {
+            Some((f, v)) if f.starts_with("--") || f == "-d" || f == "-t" || f == "-g" => {
                 (f.to_string(), Some(v.to_string()))
             }
             _ => (a.clone(), None),
@@ -90,6 +110,48 @@ pub(crate) fn parse_from(
                     }
                 }
             }
+            "--color" => {
+                let Some(v) = inline.or_else(|| it.next()) else {
+                    return Err("error: --color requires height|frequency|mono".to_string());
+                };
+                match ColorMode::from_str(&v) {
+                    Some(m) => color = Some(m),
+                    None => {
+                        return Err(format!(
+                            "error: unknown color '{v}' (height|frequency|mono)"
+                        ));
+                    }
+                }
+            }
+            "--layout" => {
+                let Some(v) = inline.or_else(|| it.next()) else {
+                    return Err("error: --layout requires symmetric|left-right".to_string());
+                };
+                match LayoutMode::from_str(&v) {
+                    Some(m) => layout = Some(m),
+                    None => {
+                        return Err(format!(
+                            "error: unknown layout '{v}' (symmetric|left-right)"
+                        ));
+                    }
+                }
+            }
+            "-g" | "--gain" => {
+                let Some(v) = inline.or_else(|| it.next()) else {
+                    return Err(format!("error: {flag} requires a number 0.2-8.0"));
+                };
+                match v.parse::<f32>() {
+                    Ok(g) if g.is_finite() && (0.2..=8.0).contains(&g) => gain = Some(g),
+                    _ => return Err(format!("error: bad gain '{v}' (need 0.2-8.0)")),
+                }
+            }
+            "--source" => {
+                let Some(v) = inline.or_else(|| it.next()) else {
+                    return Err("error: --source requires system or an app name".to_string());
+                };
+                source = Some(v);
+            }
+            "--no-setup" => no_setup = true,
             "--no-color" => no_color = true,
             _ => {
                 return Err(format!("error: unknown flag '{a}'. See xvisualizer --help"));
@@ -100,13 +162,17 @@ pub(crate) fn parse_from(
         device,
         no_color,
         theme,
+        color,
+        layout,
+        gain,
+        source,
+        no_setup,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::Theme;
 
     fn args_of(flags: &[&str], env: bool) -> Result<Args, String> {
         let it = flags.iter().map(|s| s.to_string());
@@ -127,10 +193,41 @@ mod tests {
     }
 
     #[test]
+    fn parses_new_startup_flags() {
+        let a = args_of(
+            &[
+                "--color",
+                "frequency",
+                "--layout=left-right",
+                "--gain",
+                "2.5",
+                "--source",
+                "firefox",
+                "--no-setup",
+            ],
+            false,
+        )
+        .unwrap();
+        assert_eq!(a.color, Some(ColorMode::Frequency));
+        assert_eq!(a.layout, Some(LayoutMode::LeftToRight));
+        assert_eq!(a.gain, Some(2.5));
+        assert_eq!(a.source.as_deref(), Some("firefox"));
+        assert!(a.no_setup);
+        let b = args_of(&["-g=0.5", "--color=mono"], false).unwrap();
+        assert_eq!(b.gain, Some(0.5));
+        assert_eq!(b.color, Some(ColorMode::Mono));
+    }
+
+    #[test]
     fn rejects_unknown_flag_theme_and_missing_value() {
         assert!(args_of(&["--nope"], false).is_err());
         assert!(args_of(&["-t", "neon"], false).is_err());
         assert!(args_of(&["-d"], false).is_err());
+        assert!(args_of(&["--color", "neon"], false).is_err());
+        assert!(args_of(&["--layout", "neon"], false).is_err());
+        assert!(args_of(&["--gain", "99"], false).is_err());
+        assert!(args_of(&["--gain", "abc"], false).is_err());
+        assert!(args_of(&["--source"], false).is_err());
     }
 
     #[test]

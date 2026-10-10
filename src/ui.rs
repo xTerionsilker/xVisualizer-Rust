@@ -2,8 +2,8 @@ use std::fmt::Write as _;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::color::ColorMenu;
-use crate::layout::LayoutMenu;
+use crate::color::{ColorMenu, ColorMode};
+use crate::layout::{LayoutMenu, LayoutMode};
 use crate::source::PlaybackStream;
 use crate::source::SourceMenu;
 use crate::theme::Theme;
@@ -69,15 +69,26 @@ pub(crate) fn choice_key(key: KeyEvent, selected: &mut usize, len: usize) -> Men
 }
 
 impl UiState {
-    pub fn new(initial: Theme) -> Self {
+    pub fn with_initial(theme: Theme, color: ColorMode, layout: LayoutMode, setup: bool) -> Self {
+        let mut theme_menu = ThemeMenu::new(theme);
+        let mut color_menu = ColorMenu::with(color);
+        let mut layout_menu = LayoutMenu::with(layout);
+        if !setup {
+            theme_menu.open = false;
+            color_menu.open = false;
+            layout_menu.open = false;
+        } else {
+            color_menu.open = false;
+            layout_menu.open = false;
+        }
         Self {
-            theme: ThemeMenu::new(initial),
+            theme: theme_menu,
             source: SourceMenu::new(),
-            color: ColorMenu::new(),
-            layout: LayoutMenu::new(),
+            color: color_menu,
+            layout: layout_menu,
             paused: false,
             in_help: false,
-            setup: true,
+            setup,
         }
     }
 

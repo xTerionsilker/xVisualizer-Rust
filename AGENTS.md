@@ -7,19 +7,19 @@ Single-crate Rust TUI app (`edition 2024`): terminal ASCII spectrum visualizer c
 - Build: `cargo build` — `cargo run --release` for real use (debug build works but frame timing/noise differs).
 - Verify: `cargo clippy --all-targets` (repo standard is zero warnings), then `cargo test`.
 - Format: `cargo fmt --check` (default rustfmt, no custom config).
-- Run with args after `--`: `cargo run --release -- --device <monitor> --theme solid --no-color`.
-- Only tests are pure `pactl` output parsers in `src/source.rs`: `cargo test source` runs them without audio hardware.
+- Run with args after `--`: `cargo run --release -- --device <monitor> --theme solid --color frequency --layout symmetric --gain 1.5 --source system --no-color --no-setup`.
+- Only tests are pure `pactl` output parsers in `src/source.rs`, CLI parsing in `src/args.rs`, config round-trip in `src/config.rs`, and pure helpers (`util`, `layout`, `theme`): `cargo test source` runs the audio-independent subset without hardware.
 
 ## Code rules
 
-- Keep code modular by domain: one file = one cohesive domain (state + keys + render live together). Current split: `args` / `audio` / `dsp` / `color` (modes + menu) / `theme` (themes + menu) / `layout` (modes + mapping + menu) / `source` (streams + menu) / `ui` (screen state, events, shared option-list screen) / `util` (gain, text helpers) / `input` / `visualizer` / `help` / `solo` / `terminal`. Feature state lives in the feature's own file (`main` owns it and passes plain values down); other modules only call that file's public API.
+- Keep code modular by domain: one file = one cohesive domain (state + keys + render live together). Current split: `args` / `audio` / `config` (settings persistence) / `dsp` / `color` (modes + menu) / `theme` (themes + menu) / `layout` (modes + mapping + menu) / `source` (streams + menu) / `ui` (screen state, events, shared option-list screen) / `util` (gain, text helpers) / `input` / `visualizer` / `help` / `solo` / `terminal`. Feature state lives in the feature's own file (`main` owns it and passes plain values down); other modules only call that file's public API.
 - Comments: minimal but practical — only where the logic is non-obvious (timing constants, PulseAudio quirks, render escape sequences). No comment per line, no restating what the code says.
 - English only: all code, identifiers, comments, CLI output, and docs strictly in English.
 
 ## Gotchas
 
 - `src/audio.rs` and solo-capture in `src/solo.rs` shell out to `pactl`/`pactl`-managed Pulse/PipeWire and need a live Linux audio stack. Do not try to verify capture, solo rerouting (`SoloSession` null-sink + loopback), or rendering headlessly — there is no mock/fixture for them.
-- On Pulse failure `capture_loop` sets the global `running` flag false, which shuts down the whole app; treat audio errors as fatal-by-design, not something to "retry in place".
+- On Pulse failure `capture_loop` reports the error through the shared slot and exits the worker; `main` retries the same device with backoff and falls back from a dead solo source to the system mix. Never restore the old fatal `running=false` behavior.
 - `CaptureSession::switch()` joins the old worker thread and clears the queue before spawning a new one. Keep that order; reusing the queue without clearing plays stale audio.
 - Frame loop in `src/main.rs`: single buffered `write` + `flush` per frame at ~120 Hz, `dt` clamped to `0.001–0.05` s. Preserve both when touching timing/smoothing.
 - DSP constants: `RATE`/`WINDOW` are defined in `src/audio.rs` and consumed by `src/dsp.rs` (`WINDOW=2048`, `RATE=48000`, `READ_FRAMES=512`, `F_MIN/F_MAX 30Hz–16kHz`, `GAMMA 0.6`); audio chunk sizes in `src/audio.rs` (`fragsize = READ_FRAMES*4`, `QUEUE_CAP=8192`). These are coupled — changing one without the other breaks latency math documented in `README.md`.

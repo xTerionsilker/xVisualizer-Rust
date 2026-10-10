@@ -11,8 +11,18 @@ impl Gain {
         Self::default()
     }
 
+    pub fn with(value: f32) -> Self {
+        let mut g = Self::new();
+        g.set(value);
+        g
+    }
+
     pub fn value(&self) -> f32 {
         self.value
+    }
+
+    pub fn set(&mut self, value: f32) {
+        self.value = value.clamp(MIN, MAX);
     }
 
     pub fn up(&mut self) {

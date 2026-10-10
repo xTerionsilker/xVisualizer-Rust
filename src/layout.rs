@@ -4,7 +4,7 @@ use crate::ui::{ChoiceMenu, MenuOutcome, choice_key, render_choice};
 
 /// Spectrum layout: mirrored around the center (bass in the middle)
 /// or plain left-to-right (bass on the left, treble on the right).
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum LayoutMode {
     #[default]
     Symmetric,
@@ -43,6 +43,14 @@ impl LayoutMode {
             LayoutMode::LeftToRight => "bass left, treble right",
         }
     }
+
+    pub fn from_str(s: &str) -> Option<LayoutMode> {
+        match s.to_lowercase().as_str() {
+            "symmetric" | "mirror" | "1" => Some(LayoutMode::Symmetric),
+            "left-right" | "leftright" | "left" | "ltr" | "2" => Some(LayoutMode::LeftToRight),
+            _ => None,
+        }
+    }
 }
 
 /// Center-symmetric spectrum mapping: bass in the middle, treble at the edges.
@@ -78,6 +86,14 @@ impl LayoutMenu {
             selected: LayoutMode::default().index(),
             open: false,
         }
+    }
+
+    pub fn with(current: LayoutMode) -> Self {
+        let mut m = Self::new();
+        m.current = current;
+        m.selected = current.index();
+        m.open = false;
+        m
     }
 
     pub fn open(&mut self) {

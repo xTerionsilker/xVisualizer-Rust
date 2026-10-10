@@ -1,6 +1,7 @@
 mod args;
 mod audio;
 mod color;
+mod config;
 mod dsp;
 mod help;
 mod input;
@@ -24,6 +25,7 @@ use crate::source::CaptureTarget;
 use crate::ui::{UiEvent, UiState};
 
 const NOTICE_TIME: Duration = Duration::from_secs(4);
+const SOLO_MAX_RETRIES: u32 = 5;
 
 fn main() -> std::io::Result<()> {
     let parsed = args::parse_args();
@@ -34,19 +36,73 @@ fn main() -> std::io::Result<()> {
         stop.store(false, Ordering::SeqCst);
     });
 
-    let system_monitor = parsed.device.clone().or_else(audio::detect_monitor);
+    let cfg = config::load();
+    let theme = parsed.theme.or(cfg.theme).unwrap_or(theme::Theme::Classic);
+    let color = parsed.color.or(cfg.color).unwrap_or_default();
+    let layout_mode = parsed.layout.or(cfg.layout).unwrap_or_default();
+    let gain_value = parsed.gain.or(cfg.gain).unwrap_or(1.0);
+    let explicit_device = parsed.device.clone().or(cfg.device);
+    let system_monitor = explicit_device.clone().or_else(audio::detect_monitor);
+    let skip_setup = parsed.no_setup
+        || cfg.found
+        || parsed.theme.is_some()
+        || parsed.color.is_some()
+        || parsed.layout.is_some()
+        || parsed.source.is_some()
+        || parsed.device.is_some()
+        || parsed.gain.is_some();
+
     let mut capture = audio::CaptureSession::start(system_monitor.clone(), running.clone());
 
     thread::sleep(Duration::from_millis(120));
 
     let mut analyzer = dsp::Analyzer::new();
-    let mut gain = util::Gain::new();
-    let mut ui = UiState::new(parsed.theme.unwrap_or(theme::Theme::Classic));
+    let mut gain = util::Gain::with(gain_value);
+    let mut ui = UiState::with_initial(theme, color, layout_mode, !skip_setup);
 
     // None = system mix; dropping the session moves the stream back
     // and unloads the helper modules.
     let mut solo: Option<SoloSession> = None;
     let mut notice: Option<(String, Instant)> = None;
+    let mut current_monitor = system_monitor.clone();
+
+    // `--source` preselects one app by (case-insensitive) name fragment.
+    if let Some(want) = parsed.source.as_deref()
+        && !want.eq_ignore_ascii_case("system")
+    {
+        let apps = source::list_playback_streams();
+        let needle = want.to_lowercase();
+        let hit = apps.iter().find(|a| {
+            a.input.to_string() == want
+                || a.app.to_lowercase().contains(&needle)
+                || a.label().to_lowercase().contains(&needle)
+        });
+        match hit {
+            Some(app) => match SoloSession::start(app) {
+                Ok(session) => {
+                    current_monitor = Some(session.monitor_source());
+                    capture.switch(current_monitor.clone(), &running);
+                    ui.source.target = CaptureTarget::Stream(app.clone());
+                    notice = Some((
+                        format!("Capturing {} (still audible)", app.label()),
+                        Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    notice = Some((
+                        format!("Source '{want}' failed, using system: {e}"),
+                        Instant::now(),
+                    ));
+                }
+            },
+            None => {
+                notice = Some((
+                    format!("Source '{want}' not playing, using system"),
+                    Instant::now(),
+                ));
+            }
+        }
+    }
 
     let mut stdout = std::io::stdout();
     let _guard = terminal::enter(&mut stdout)?;
@@ -60,14 +116,22 @@ fn main() -> std::io::Result<()> {
     // Single write + flush per frame to avoid flicker.
     let mut frame = String::with_capacity(80 * 30);
     let mut prev = Instant::now();
+    // Auto-reconnect state: same device is retried with backoff, solo
+    // falls back to the system mix after repeated failures.
+    let mut retry_count: u32 = 0;
+    let mut reconnect_at: Option<Instant> = None;
+    let mut last_ok = Instant::now();
 
     while running.load(Ordering::SeqCst) {
         for event in input::poll_keys(&mut ui, &running) {
             match event {
                 UiEvent::SelectSystem => {
                     drop(solo.take());
-                    capture.switch(system_monitor.clone(), &running);
+                    current_monitor = system_monitor.clone();
+                    capture.switch(current_monitor.clone(), &running);
                     ui.source.target = CaptureTarget::System;
+                    retry_count = 0;
+                    reconnect_at = None;
                     notice = Some(("Capturing system mix".to_string(), Instant::now()));
                 }
                 UiEvent::SelectStream(app) => {
@@ -75,6 +139,7 @@ fn main() -> std::io::Result<()> {
                     match SoloSession::start(&app) {
                         Ok(session) => {
                             let dev = Some(session.monitor_source());
+                            current_monitor = dev.clone();
                             capture.switch(dev, &running);
                             if session.loopback_active() {
                                 notice = Some((
@@ -88,10 +153,16 @@ fn main() -> std::io::Result<()> {
                                 ));
                             }
                             solo = Some(session);
+                            retry_count = 0;
+                            reconnect_at = None;
                         }
                         Err(e) => {
-                            capture.switch(system_monitor.clone(), &running);
+                            drop(solo.take());
+                            current_monitor = system_monitor.clone();
+                            capture.switch(current_monitor.clone(), &running);
                             ui.source.target = CaptureTarget::System;
+                            retry_count = 0;
+                            reconnect_at = None;
                             notice = Some((
                                 format!("Source switch failed, back to system: {e}"),
                                 Instant::now(),
@@ -115,6 +186,36 @@ fn main() -> std::io::Result<()> {
         }
         if !running.load(Ordering::SeqCst) {
             break;
+        }
+        if let Some(err) = capture.take_error() {
+            retry_count += 1;
+            if solo.is_some() && retry_count > SOLO_MAX_RETRIES {
+                drop(solo.take());
+                current_monitor = system_monitor.clone();
+                capture.switch(current_monitor.clone(), &running);
+                ui.source.target = CaptureTarget::System;
+                retry_count = 0;
+                reconnect_at = None;
+                notice = Some((
+                    format!("App source gone ({err}), back to system"),
+                    Instant::now(),
+                ));
+            } else {
+                let backoff = 500 * u64::from(retry_count.min(4) + 1);
+                reconnect_at = Some(Instant::now() + Duration::from_millis(backoff));
+                notice = Some((format!("Audio lost ({err}) - retrying..."), Instant::now()));
+            }
+        }
+        if let Some(at) = reconnect_at
+            && Instant::now() >= at
+            && running.load(Ordering::SeqCst)
+        {
+            capture.switch(current_monitor.clone(), &running);
+            reconnect_at = None;
+        }
+        if last_ok.elapsed() > Duration::from_secs(5) {
+            retry_count = 0;
+            last_ok = Instant::now();
         }
         let frame_start = Instant::now();
         // Clamp dt against resize/lag spikes so smoothing stays stable.
@@ -140,7 +241,8 @@ fn main() -> std::io::Result<()> {
                 layout::LayoutMode::LeftToRight => display_fit.max(1),
             };
             if !analyzer.update(capture.queue(), bar_count, dt, gain.value()) {
-                break;
+                reconnect_at = Some(Instant::now() + Duration::from_millis(500));
+                notice = Some(("Audio queue lost - retrying...".to_string(), Instant::now()));
             }
         }
 
@@ -219,6 +321,13 @@ fn main() -> std::io::Result<()> {
     }
 
     drop(solo);
+    config::save(
+        ui.theme.current,
+        ui.color.current,
+        ui.layout.current,
+        gain.value(),
+        &explicit_device,
+    );
 
     Ok(())
 }

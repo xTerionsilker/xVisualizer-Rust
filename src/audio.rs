@@ -52,11 +52,13 @@ pub fn detect_monitor() -> Option<String> {
 /// Restartable background capture sharing one sample queue.
 ///
 /// The device can change at runtime, so the worker has its own `stop` flag
-/// separate from the global `running` flag.
+/// separate from the global `running` flag. Pulse errors are reported through
+/// a shared slot instead of killing the app; `main` retries the same device.
 pub struct CaptureSession {
     queue: Arc<Mutex<VecDeque<f32>>>,
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    error: Arc<Mutex<Option<String>>>,
 }
 
 impl CaptureSession {
@@ -64,16 +66,23 @@ impl CaptureSession {
         let queue: Arc<Mutex<VecDeque<f32>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(QUEUE_CAP)));
         let stop = Arc::new(AtomicBool::new(false));
-        let handle = spawn_worker(queue.clone(), monitor, running, stop.clone());
+        let error = Arc::new(Mutex::new(None));
+        let handle = spawn_worker(queue.clone(), monitor, running, stop.clone(), error.clone());
         Self {
             queue,
             stop,
             handle: Some(handle),
+            error,
         }
     }
 
     pub fn queue(&self) -> &Arc<Mutex<VecDeque<f32>>> {
         &self.queue
+    }
+
+    /// Takes a pending capture error left by a dead worker, if any.
+    pub fn take_error(&self) -> Option<String> {
+        self.error.lock().ok()?.take()
     }
 
     /// Stops the worker, drops stale audio, and captures `monitor` instead.
@@ -82,6 +91,9 @@ impl CaptureSession {
         if let Ok(mut q) = self.queue.lock() {
             q.clear();
         }
+        if let Ok(mut e) = self.error.lock() {
+            e.take();
+        }
         let stop = Arc::new(AtomicBool::new(false));
         self.stop = stop.clone();
         self.handle = Some(spawn_worker(
@@ -89,6 +101,7 @@ impl CaptureSession {
             monitor,
             running.clone(),
             stop,
+            self.error.clone(),
         ));
     }
 
@@ -111,8 +124,20 @@ fn spawn_worker(
     monitor: Option<String>,
     running: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    error: Arc<Mutex<Option<String>>>,
 ) -> JoinHandle<()> {
-    thread::spawn(move || capture_loop(queue, monitor, running, stop))
+    thread::spawn(move || capture_loop(queue, monitor, running, stop, error))
+}
+
+fn report_error(error: &Arc<Mutex<Option<String>>>, stop: &Arc<AtomicBool>, msg: String) {
+    if stop.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Ok(mut e) = error.lock()
+        && e.is_none()
+    {
+        *e = Some(msg);
+    }
 }
 
 fn capture_loop(
@@ -120,6 +145,7 @@ fn capture_loop(
     monitor: Option<String>,
     running: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    error: Arc<Mutex<Option<String>>>,
 ) {
     // Monitors are usually stereo; a single channel would capture left only.
     let spec = Spec {
@@ -149,8 +175,7 @@ fn capture_loop(
     ) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("pulse record error: {e:?}");
-            running.store(false, Ordering::SeqCst);
+            report_error(&error, &stop, format!("cannot open device: {e:?}"));
             return;
         }
     };
@@ -161,11 +186,10 @@ fn capture_loop(
     while running.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst) {
         if simple.read(&mut raw).is_err() {
             failures += 1;
-            // Persistent read errors mean the device is gone; shut down
-            // instead of spinning silently (fatal-by-design, see AGENTS.md).
+            // Persistent read errors mean the device is gone; report it and
+            // let `main` retry the same device instead of quitting.
             if failures > 20 {
-                eprintln!("pulse record error: device read failed repeatedly");
-                running.store(false, Ordering::SeqCst);
+                report_error(&error, &stop, "device read failed repeatedly".to_string());
                 return;
             }
             thread::sleep(Duration::from_millis(50));
@@ -178,10 +202,7 @@ fn capture_loop(
             let r = i16::from_le_bytes([frame[2], frame[3]]) as f32;
             mono[i] = (l + r) / 2.0 / 32768.0;
         }
-        let mut q = match buf.lock() {
-            Ok(q) => q,
-            Err(_) => return,
-        };
+        let mut q = buf.lock().unwrap_or_else(|e| e.into_inner());
         q.extend(mono.iter().copied());
         let excess = q.len().saturating_sub(QUEUE_CAP);
         if excess > 0 {

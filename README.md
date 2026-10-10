@@ -29,6 +29,9 @@ Terminal spectrum visualizer for system audio. Captures playback via a PulseAudi
 - Three bar color modes: `Height` (green-yellow-red by level), `Frequency` (color by band), `Mono` (uniform white).
 - Two spectrum layouts: `Symmetric` (bass in the center, mirrored) and `Left-Right` (bass on the left).
 - Manual sensitivity control (0.2x–8.0x, reset to 1.0x).
+- Startup presets and persistence: `--theme/--color/--layout/--gain/--source/--device`
+  with settings saved to `~/.config/xvisualizer/config` and reused on next run.
+- Capture errors auto-reconnect with backoff; a lost solo app falls back to the system mix.
 - Startup setup wizard: theme → bar color → layout → capture source.
 - In-program menus for theme, color, layout, and capture source; help overlay; pause.
 - Bar count adapts to terminal width (up to 64 bars).
@@ -61,16 +64,24 @@ xvisualizer [OPTIONS]
 Options:
   -d, --device NAME   Pulse source (default: auto-detected monitor of the default sink)
   -t, --theme NAME    start theme: classic | solid (default: classic)
+      --color NAME    start color: height | frequency | mono
+      --layout NAME   start layout: symmetric | left-right
+  -g, --gain X        start sensitivity 0.2-8.0 (default: 1.0)
+      --source NAME   start source: system or app name (default: system)
+      --no-setup      skip the startup setup wizard
       --no-color      disable ANSI colors
   -h, --help          show help
 ```
 
 Notes:
 
-- `--device` and `--theme` accept both `--flag value` and `--flag=value` forms.
+- `--device`, `--theme`, `--color`, `--layout`, `--gain`, and `--source` accept both `--flag value` and `--flag=value` forms.
 - `--theme` also accepts the aliases `1` (classic) and `2` (solid).
+- `--source system` captures the system mix; any other value matches a playing app by id or name fragment.
+- Any startup flag (or a saved config) skips the setup wizard; `--no-setup` always skips it.
+- Settings are saved to `~/.config/xvisualizer/config` (or `$XDG_CONFIG_HOME`) on exit and reused next run; CLI flags override them.
 - Setting the `NO_COLOR` environment variable has the same effect as `--no-color`.
-- Unknown flags and unknown theme names terminate the program with exit code 2 and an error message.
+- Unknown flags and unknown theme/color/layout names terminate the program with exit code 2 and an error message.
 
 Examples:
 
@@ -196,8 +207,9 @@ The exact appearance depends on the terminal font and width; the bar count scale
 ```text
 src/
   main.rs         entry point and frame-loop orchestration
-  args.rs         CLI parsing (device, theme, color flags) and --help text
-  audio.rs        PulseAudio monitor capture into a sample queue; monitor auto-detection
+  args.rs         CLI parsing (device, theme, color, layout, gain, source, setup, color flags) and --help text
+  audio.rs        PulseAudio monitor capture into a sample queue; monitor auto-detection; error slot for reconnect
+  config.rs       settings persistence (~/.config/xvisualizer/config): load/save theme, color, layout, gain, device
   dsp.rs          Hann window, FFT, log bands, gain/gamma mapping, smoothing, peaks
   util.rs         manual sensitivity multiplier (+/-, G reset; 0.2x-8.0x), frame text helpers
   color.rs        bar color modes (Height / Frequency / Mono), ANSI codes, color menu
@@ -236,7 +248,7 @@ cargo test
 cargo fmt --check
 ```
 
-Standards: `cargo clippy --all-targets` must report zero warnings. `cargo test` covers the `pactl` output parsers in `src/source.rs` and the pure helpers (`util`, `layout`, `theme`); these run without audio hardware. Use `cargo run --release` for representative frame timing. Audio capture, solo rerouting, and rendering require a live Linux audio stack and cannot be verified headlessly.
+Standards: `cargo clippy --all-targets` must report zero warnings. `cargo test` covers the `pactl` output parsers in `src/source.rs`, the CLI parsing in `src/args.rs`, the config round-trip in `src/config.rs`, and the pure helpers (`util`, `layout`, `theme`); these run without audio hardware. Use `cargo run --release` for representative frame timing. Audio capture, solo rerouting, and rendering require a live Linux audio stack and cannot be verified headlessly.
 
 ## Dependencies
 
@@ -250,5 +262,7 @@ Standards: `cargo clippy --all-targets` must report zero warnings. `cargo test` 
 - Linux only. Requires PulseAudio or PipeWire with a working Pulse layer and `pactl`.
 - Without `pactl` or without any monitor source, monitor auto-detection yields nothing and capture falls back to the server default source.
 - The application list in the source menu reflects currently playing streams; silent or idle applications do not appear (use `R` to refresh).
-- Audio device failures terminate the application by design; there is no automatic reconnection.
+- PulseAudio errors during capture are retried with backoff instead of quitting: the same
+  device is reopened and the footer reports `Audio lost (...) - retrying...`; a solo source
+  that stays gone falls back to the system mix.
 - Minimum usable terminal size is small (bars shrink to a single bar), but very narrow or short windows degrade readability.

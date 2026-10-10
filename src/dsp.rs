@@ -76,10 +76,7 @@ impl Analyzer {
         let cap_fall = dt * 1.2;
 
         {
-            let q = match queue.lock() {
-                Ok(q) => q,
-                Err(_) => return false,
-            };
+            let q = queue.lock().unwrap_or_else(|e| e.into_inner());
             let n = q.len().min(WINDOW);
             let skip = q.len() - n;
             // Missing head is silence; newest samples go at the window end.

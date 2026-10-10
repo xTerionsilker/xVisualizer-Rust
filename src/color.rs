@@ -2,7 +2,7 @@ use crossterm::event::KeyEvent;
 
 use crate::ui::{ChoiceMenu, MenuOutcome, choice_key, render_choice};
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ColorMode {
     #[default]
     Height,
@@ -44,6 +44,15 @@ impl ColorMode {
             ColorMode::Height => "green-yellow-red by height",
             ColorMode::Frequency => "rainbow by frequency",
             ColorMode::Mono => "uniform white",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<ColorMode> {
+        match s.to_lowercase().as_str() {
+            "height" | "1" => Some(ColorMode::Height),
+            "frequency" | "freq" | "rainbow" | "2" => Some(ColorMode::Frequency),
+            "mono" | "white" | "3" => Some(ColorMode::Mono),
+            _ => None,
         }
     }
 }
@@ -101,6 +110,14 @@ impl ColorMenu {
             selected: ColorMode::default().index(),
             open: false,
         }
+    }
+
+    pub fn with(current: ColorMode) -> Self {
+        let mut m = Self::new();
+        m.current = current;
+        m.selected = current.index();
+        m.open = false;
+        m
     }
 
     pub fn open(&mut self) {
