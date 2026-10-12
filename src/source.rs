@@ -219,7 +219,7 @@ pub fn render(
     } else {
         "Select capture source"
     };
-    write_centered(frame, cols, title, use_color, "\x1b[1;36m", true);
+    write_centered(frame, cols, title, use_color, "\x1b[1;35m", true);
     let hint = "Up/Down - select  |  Enter - capture  |  R - refresh";
     write_centered(frame, cols, hint, use_color, "\x1b[90m", true);
     frame.push_str("\x1b[K\r\n");

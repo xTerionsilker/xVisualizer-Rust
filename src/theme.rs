@@ -136,7 +136,7 @@ pub fn render(
     let tx = center_x(cols, title.chars().count());
     push_spaces(frame, tx);
     if use_color {
-        frame.push_str("\x1b[1;36m");
+        frame.push_str("\x1b[1;35m");
     }
     frame.push_str(title);
     if use_color {

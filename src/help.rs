@@ -61,7 +61,7 @@ pub fn render_help(frame: &mut String, cols: usize, rows: usize, use_color: bool
         };
         push_spaces(frame, pad);
         if is_title && use_color {
-            frame.push_str("\x1b[1;36m");
+            frame.push_str("\x1b[1;35m");
         }
         frame.push_str(line);
         if is_title && use_color {

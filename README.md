@@ -26,7 +26,7 @@ Terminal spectrum visualizer for system audio. Captures playback via a PulseAudi
 - Inertial bar motion: fast attack (~12 ms), soft release (~160 ms), falling peak markers (~0.8 s).
 - Fixed 120 Hz render loop; one buffered write plus flush per frame, no full-screen clear, no flicker.
 - Two bar themes: `Classic` (1-column bars with gaps) and `Solid` (2-column joined bars).
-- Three bar color modes: `Height` (green-yellow-red by level), `Frequency` (color by band), `Mono` (uniform white).
+- Three bar color modes: `Height` (purple shades by level), `Frequency` (purple shades by band), `Mono` (uniform purple).
 - Two spectrum layouts: `Symmetric` (bass in the center, mirrored) and `Left-Right` (bass on the left).
 - Manual sensitivity control (0.2x–8.0x, reset to 1.0x).
 - Startup presets and persistence: `--theme/--color/--layout/--gain/--source/--device`
@@ -183,8 +183,8 @@ Typical end-to-end latency is 60–100 ms: ~10 ms fragment + ~21 ms FFT window c
 
 - 120 Hz frame loop (`dt` clamped to 1–50 ms so smoothing stays stable under lag or resize spikes).
 - One buffered `write` plus `flush` per frame; cursor homed once (`ESC[H`); no full-screen clear.
-- Bar bodies use full blocks (`█`); fractional bar tops use eighth blocks (`▁▂▃▄▅▆▇`); peak markers use `─` (cyan when colors are enabled).
-- Colors: `Height` mode colors rows green (low), yellow (mid), red (top); `Frequency` mode colors bands red → yellow → green → cyan → magenta from bass to treble; `Mono` is uniform white. Peak markers keep their own color in all modes.
+- Bar bodies use full blocks (`█`); fractional bar tops use eighth blocks (`▁▂▃▄▅▆▇`); peak markers use `─` (bright purple when colors are enabled).
+- Colors: black background (terminal default) with purple foregrounds. `Height` mode colors rows indigo (low), purple (mid), bright purple (top); `Frequency` mode colors bands indigo → purple → bright purple from bass to treble; `Mono` is uniform bright purple. Peak markers keep their own color in all modes. Menu titles use bold purple.
 
 Example frame:
 

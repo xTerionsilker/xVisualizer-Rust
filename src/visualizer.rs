@@ -220,7 +220,7 @@ fn push_gap(frame: &mut String, gap_width: usize) {
 
 fn push_peak(frame: &mut String, bar_width: usize, use_color: bool) {
     if use_color {
-        frame.push_str("\x1b[0m\x1b[36m");
+        frame.push_str("\x1b[0m\x1b[95m");
     }
     for _ in 0..bar_width {
         frame.push('─');

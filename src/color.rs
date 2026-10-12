@@ -41,9 +41,9 @@ impl ColorMode {
 
     pub fn desc(self) -> &'static str {
         match self {
-            ColorMode::Height => "green-yellow-red by height",
-            ColorMode::Frequency => "rainbow by frequency",
-            ColorMode::Mono => "uniform white",
+            ColorMode::Height => "purple shades by height",
+            ColorMode::Frequency => "purple shades by frequency",
+            ColorMode::Mono => "uniform purple",
         }
     }
 
@@ -60,26 +60,26 @@ impl ColorMode {
 fn row_color_height(row: usize, area_h: usize) -> &'static str {
     let ratio = row as f32 / area_h.max(1) as f32;
     if ratio >= 0.85 {
-        "\x1b[31m"
+        "\x1b[95m"
     } else if ratio >= 0.6 {
-        "\x1b[33m"
+        "\x1b[35m"
     } else {
-        "\x1b[32m"
+        "\x1b[34m"
     }
 }
 
 fn freq_color(idx: usize, n_bars: usize) -> &'static str {
     let ratio = idx as f32 / n_bars.max(1) as f32;
     if ratio < 0.2 {
-        "\x1b[31m"
+        "\x1b[34m"
     } else if ratio < 0.4 {
-        "\x1b[33m"
-    } else if ratio < 0.6 {
-        "\x1b[32m"
-    } else if ratio < 0.8 {
-        "\x1b[36m"
-    } else {
         "\x1b[35m"
+    } else if ratio < 0.6 {
+        "\x1b[95m"
+    } else if ratio < 0.8 {
+        "\x1b[1;35m"
+    } else {
+        "\x1b[1;95m"
     }
 }
 
@@ -93,7 +93,7 @@ pub fn bar_color(
     match mode {
         ColorMode::Height => row_color_height(row, area_h),
         ColorMode::Frequency => freq_color(bar_idx, n_bars),
-        ColorMode::Mono => "\x1b[37m",
+        ColorMode::Mono => "\x1b[95m",
     }
 }
 
