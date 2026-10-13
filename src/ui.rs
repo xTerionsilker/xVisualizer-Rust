@@ -116,6 +116,7 @@ pub(crate) fn render_choice(
     rows: usize,
     menu: &ChoiceMenu,
     use_color: bool,
+    colors: &crate::color::ColorConfig,
 ) {
     frame.clear();
     let _ = write!(frame, "\x1b[H");
@@ -127,7 +128,7 @@ pub(crate) fn render_choice(
     let tx = center_x(cols, menu.title.chars().count());
     push_spaces(frame, tx);
     if use_color {
-        frame.push_str("\x1b[1;35m");
+        frame.push_str(colors.title());
     }
     frame.push_str(menu.title);
     if use_color {
@@ -139,7 +140,7 @@ pub(crate) fn render_choice(
     let hx = center_x(cols, hint_top.chars().count());
     push_spaces(frame, hx);
     if use_color {
-        frame.push_str("\x1b[90m");
+        frame.push_str(colors.hint());
     }
     frame.push_str(hint_top);
     if use_color {
@@ -175,7 +176,7 @@ pub(crate) fn render_choice(
     let bx = center_x(cols, menu.quick_hint.chars().count() + mid.chars().count());
     push_spaces(frame, bx);
     if use_color {
-        frame.push_str("\x1b[90m");
+        frame.push_str(colors.hint());
     }
     frame.push_str(menu.quick_hint);
     frame.push_str(mid);

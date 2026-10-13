@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::color::{ColorMode, bar_color};
+use crate::color::{ColorConfig, ColorMode};
 use crate::layout::{LayoutMode, display_count, spectrum_index};
 use crate::util::{push_spaces, truncate_chars};
 
@@ -21,6 +21,7 @@ pub struct Visualizer<'a> {
     pub layout: LayoutMode,
     pub paused: bool,
     pub gain: f32,
+    pub colors: &'a ColorConfig,
 }
 
 const PARTS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -72,7 +73,7 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
         // per row so a single prefix suffices, Frequency/Mono vary per bar.
         let uniform_row = matches!(v.color_mode, ColorMode::Height);
         if v.use_color && uniform_row {
-            frame.push_str(bar_color(row, area_h, 0, n_bars, v.color_mode));
+            frame.push_str(v.colors.bar_color(row, area_h, 0, n_bars, v.color_mode));
         }
         for i in 0..n_bars {
             // Frequency colors follow the spectrum (bass = center in
@@ -84,7 +85,10 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
                 (i, n_bars)
             };
             if v.use_color && !uniform_row {
-                frame.push_str(bar_color(row, area_h, color_idx, color_n, v.color_mode));
+                frame.push_str(
+                    v.colors
+                        .bar_color(row, area_h, color_idx, color_n, v.color_mode),
+                );
             }
             // Integer part is full blocks, the fraction is 1/8-blocks.
             let fh = bar_h[i];
@@ -100,9 +104,9 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
                 let ch = PARTS[idx];
                 if ch == ' ' {
                     if has_peak {
-                        push_peak(frame, v.bar_width, v.use_color);
+                        push_peak(frame, v.bar_width, v.use_color, v.colors.peak());
                         if v.use_color {
-                            frame.push_str(bar_color(
+                            frame.push_str(v.colors.bar_color(
                                 row,
                                 area_h,
                                 color_idx,
@@ -121,10 +125,16 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
                     }
                 }
             } else if has_peak {
-                push_peak(frame, v.bar_width, v.use_color);
+                push_peak(frame, v.bar_width, v.use_color, v.colors.peak());
                 if v.use_color {
                     // Peak uses its own color; restore the bar color after it.
-                    frame.push_str(bar_color(row, area_h, color_idx, color_n, v.color_mode));
+                    frame.push_str(v.colors.bar_color(
+                        row,
+                        area_h,
+                        color_idx,
+                        color_n,
+                        v.color_mode,
+                    ));
                 }
             } else {
                 for _ in 0..v.bar_width {
@@ -136,7 +146,7 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
                     frame.push_str("\x1b[0m");
                     push_gap(frame, v.gap_width);
                     if uniform_row {
-                        frame.push_str(bar_color(row, area_h, 0, n_bars, v.color_mode));
+                        frame.push_str(v.colors.bar_color(row, area_h, 0, n_bars, v.color_mode));
                     }
                 } else {
                     push_gap(frame, v.gap_width);
@@ -218,9 +228,10 @@ fn push_gap(frame: &mut String, gap_width: usize) {
     }
 }
 
-fn push_peak(frame: &mut String, bar_width: usize, use_color: bool) {
+fn push_peak(frame: &mut String, bar_width: usize, use_color: bool, peak_color: &str) {
     if use_color {
-        frame.push_str("\x1b[0m\x1b[95m");
+        frame.push_str("\x1b[0m");
+        frame.push_str(peak_color);
     }
     for _ in 0..bar_width {
         frame.push('─');

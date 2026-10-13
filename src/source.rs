@@ -201,6 +201,7 @@ pub fn render(
     menu: &SourceMenu,
     setup: bool,
     use_color: bool,
+    colors: &crate::color::ColorConfig,
 ) {
     frame.clear();
     let _ = write!(frame, "\x1b[H");
@@ -219,9 +220,9 @@ pub fn render(
     } else {
         "Select capture source"
     };
-    write_centered(frame, cols, title, use_color, "\x1b[1;35m", true);
+    write_centered(frame, cols, title, use_color, colors.title(), true);
     let hint = "Up/Down - select  |  Enter - capture  |  R - refresh";
-    write_centered(frame, cols, hint, use_color, "\x1b[90m", true);
+    write_centered(frame, cols, hint, use_color, colors.hint(), true);
     frame.push_str("\x1b[K\r\n");
     let ctx = OptionCtx {
         cols,
@@ -266,7 +267,7 @@ pub fn render(
     } else {
         "Esc - back  |  Q - quit"
     };
-    write_centered(frame, cols, bottom, use_color, "\x1b[90m", false);
+    write_centered(frame, cols, bottom, use_color, colors.hint(), false);
     // Clear any visualizer leftovers below the menu.
     top += total;
     while top < rows {

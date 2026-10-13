@@ -14,7 +14,13 @@ pub fn handle_key(open: &mut bool, key: KeyEvent) {
     }
 }
 
-pub fn render_help(frame: &mut String, cols: usize, rows: usize, use_color: bool) {
+pub fn render_help(
+    frame: &mut String,
+    cols: usize,
+    rows: usize,
+    use_color: bool,
+    colors: &crate::color::ColorConfig,
+) {
     frame.clear();
     let _ = write!(frame, "\x1b[H");
     let lines = [
@@ -61,7 +67,7 @@ pub fn render_help(frame: &mut String, cols: usize, rows: usize, use_color: bool
         };
         push_spaces(frame, pad);
         if is_title && use_color {
-            frame.push_str("\x1b[1;35m");
+            frame.push_str(colors.title());
         }
         frame.push_str(line);
         if is_title && use_color {
@@ -77,7 +83,8 @@ mod tests {
     #[test]
     fn help_options_share_one_left_edge() {
         let mut frame = String::new();
-        render_help(&mut frame, 80, 24, false);
+        let colors = crate::color::ColorConfig::default();
+        render_help(&mut frame, 80, 24, false, &colors);
         let starts: Vec<usize> = frame
             .split("\r\n")
             .map(|l| l.trim_start_matches("\x1b[H").trim_start_matches("\x1b[K"))

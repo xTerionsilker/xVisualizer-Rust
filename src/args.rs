@@ -10,6 +10,7 @@ pub struct Args {
     pub layout: Option<LayoutMode>,
     pub gain: Option<f32>,
     pub source: Option<String>,
+    pub colors_file: Option<String>,
     pub no_setup: bool,
 }
 
@@ -27,6 +28,9 @@ pub fn print_help() {
     println!("      --layout NAME start layout: symmetric | left-right");
     println!("  -g, --gain X      start sensitivity 0.2-8.0 (default: 1.0)");
     println!("      --source NAME start source: system or app name (default: system)");
+    println!(
+        "      --colors PATH custom colors JSON file (default: colors.json or ~/.config/xvisualizer/colors.json)"
+    );
     println!("      --no-setup    skip the startup setup wizard");
     println!("      --no-color    disable ANSI colors");
     println!("  -h, --help        show this help");
@@ -81,6 +85,7 @@ pub(crate) fn parse_from(
     let mut layout: Option<LayoutMode> = None;
     let mut gain: Option<f32> = None;
     let mut source: Option<String> = None;
+    let mut colors_file: Option<String> = None;
     let mut no_setup = false;
     let mut it = it.peekable();
     while let Some(a) = it.next() {
@@ -151,6 +156,12 @@ pub(crate) fn parse_from(
                 };
                 source = Some(v);
             }
+            "--colors" | "--colors-file" => {
+                let Some(v) = inline.or_else(|| it.next()) else {
+                    return Err("error: --colors requires a file path".to_string());
+                };
+                colors_file = Some(v);
+            }
             "--no-setup" => no_setup = true,
             "--no-color" => no_color = true,
             _ => {
@@ -166,6 +177,7 @@ pub(crate) fn parse_from(
         layout,
         gain,
         source,
+        colors_file,
         no_setup,
     }))
 }
@@ -238,5 +250,7 @@ mod tests {
         assert!(a.no_color);
         let b = args_of(&["--no-color"], false).unwrap();
         assert!(b.no_color);
+        let c = args_of(&["--colors", "custom.json"], false).unwrap();
+        assert_eq!(c.colors_file.as_deref(), Some("custom.json"));
     }
 }

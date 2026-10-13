@@ -116,10 +116,10 @@ pub fn render(
     frame: &mut String,
     cols: usize,
     rows: usize,
-    selected: usize,
-    current: Theme,
+    menu: &ThemeMenu,
     setup: bool,
     use_color: bool,
+    colors: &crate::color::ColorConfig,
 ) {
     frame.clear();
     let _ = write!(frame, "\x1b[H");
@@ -136,7 +136,7 @@ pub fn render(
     let tx = center_x(cols, title.chars().count());
     push_spaces(frame, tx);
     if use_color {
-        frame.push_str("\x1b[1;35m");
+        frame.push_str(colors.title());
     }
     frame.push_str(title);
     if use_color {
@@ -148,7 +148,7 @@ pub fn render(
     let hx = center_x(cols, hint_top.chars().count());
     push_spaces(frame, hx);
     if use_color {
-        frame.push_str("\x1b[90m");
+        frame.push_str(colors.hint());
     }
     frame.push_str(hint_top);
     if use_color {
@@ -157,8 +157,8 @@ pub fn render(
     frame.push_str("\x1b[K\r\n\r\n\x1b[K\r\n");
 
     for (idx, th) in Theme::all().iter().enumerate() {
-        let is_sel = idx == selected;
-        let is_cur = *th == current;
+        let is_sel = idx == menu.selected;
+        let is_cur = *th == menu.current;
         let preview = match th {
             Theme::Classic => "blocks with gaps",
             Theme::Solid => "joined blocks",
@@ -208,7 +208,7 @@ pub fn render(
     let bx = center_x(cols, hint_bot.chars().count());
     push_spaces(frame, bx);
     if use_color {
-        frame.push_str("\x1b[90m");
+        frame.push_str(colors.hint());
     }
     frame.push_str(hint_bot);
     if use_color {

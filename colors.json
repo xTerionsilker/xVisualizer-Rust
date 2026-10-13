@@ -1,0 +1,22 @@
+{
+  "modes": {
+    "height": [
+      { "threshold": 0.0, "color": "blue" },
+      { "threshold": 0.6, "color": "magenta" },
+      { "threshold": 0.85, "color": "bright_magenta" }
+    ],
+    "frequency": [
+      { "threshold": 0.0, "color": "blue" },
+      { "threshold": 0.2, "color": "magenta" },
+      { "threshold": 0.4, "color": "bright_magenta" },
+      { "threshold": 0.6, "color": "bold magenta" },
+      { "threshold": 0.8, "color": "bold bright_magenta" }
+    ],
+    "mono": "bright_magenta"
+  },
+  "peak": "bright_magenta",
+  "ui": {
+    "title": "bold magenta",
+    "hint": "bright_black"
+  }
+}

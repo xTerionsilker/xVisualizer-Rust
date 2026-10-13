@@ -129,6 +129,7 @@ pub fn render(
     selected: usize,
     current: LayoutMode,
     use_color: bool,
+    colors: &crate::color::ColorConfig,
 ) {
     let modes = LayoutMode::all();
     let options: Vec<(String, bool)> = modes
@@ -146,6 +147,7 @@ pub fn render(
             quick_hint: "1 / 2 - quick select",
         },
         use_color,
+        colors,
     );
 }
 

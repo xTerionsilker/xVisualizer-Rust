@@ -36,6 +36,7 @@ fn main() -> std::io::Result<()> {
         stop.store(false, Ordering::SeqCst);
     });
 
+    let colors = color::ColorConfig::load(parsed.colors_file.as_deref());
     let cfg = config::load();
     let theme = parsed.theme.or(cfg.theme).unwrap_or(theme::Theme::Classic);
     let color = parsed.color.or(cfg.color).unwrap_or_default();
@@ -255,16 +256,12 @@ fn main() -> std::io::Result<()> {
             }
         };
         if ui.source.open {
-            source::render(&mut frame, cols, rows, &ui.source, ui.setup, use_color);
+            source::render(
+                &mut frame, cols, rows, &ui.source, ui.setup, use_color, &colors,
+            );
         } else if ui.theme.open {
             theme::render(
-                &mut frame,
-                cols,
-                rows,
-                ui.theme.selected,
-                ui.theme.current,
-                ui.setup,
-                use_color,
+                &mut frame, cols, rows, &ui.theme, ui.setup, use_color, &colors,
             );
         } else if ui.color.open {
             color::render(
@@ -274,6 +271,7 @@ fn main() -> std::io::Result<()> {
                 ui.color.selected,
                 ui.color.current,
                 use_color,
+                &colors,
             );
         } else if ui.layout.open {
             layout::render(
@@ -283,9 +281,10 @@ fn main() -> std::io::Result<()> {
                 ui.layout.selected,
                 ui.layout.current,
                 use_color,
+                &colors,
             );
         } else if ui.in_help {
-            help::render_help(&mut frame, cols, rows, use_color);
+            help::render_help(&mut frame, cols, rows, use_color, &colors);
         } else {
             let (bar_width, gap_width) = ui.theme.current.dims();
             let system_label = system_monitor.as_deref().unwrap_or("mic/default");
@@ -307,6 +306,7 @@ fn main() -> std::io::Result<()> {
                     layout: ui.layout.current,
                     paused: ui.paused,
                     gain: gain.value(),
+                    colors: &colors,
                 },
             );
         }

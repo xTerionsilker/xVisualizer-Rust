@@ -8,6 +8,7 @@ Terminal spectrum visualizer for system audio. Captures playback via a PulseAudi
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Color configuration (colors.json)](#color-configuration-colorsjson)
 - [User interface](#user-interface)
 - [Capture sources](#capture-sources)
 - [Signal processing](#signal-processing)
@@ -41,7 +42,11 @@ Terminal spectrum visualizer for system audio. Captures playback via a PulseAudi
 ## Requirements
 
 - Linux with PulseAudio or PipeWire, and `pactl` available (used for monitor auto-detection, stream listing, and solo rerouting).
-- Rust toolchain that supports edition 2024.
+- Development packages for PulseAudio and pkg-config:
+  - **Debian / Ubuntu / Pop!_OS:** `sudo apt install libpulse-dev pkg-config`
+  - **Fedora / RHEL:** `sudo dnf install pulseaudio-libs-devel pkg-config`
+  - **Arch Linux:** `sudo pacman -S libpulse pkgconf`
+- Rust toolchain that supports edition 2024 (Rust 1.85 or later).
 - Terminal with ANSI escape sequence and UTF-8 support. The following glyphs must render: `█ ▁▂▃▄▅▆▇ ─`.
 
 ## Installation
@@ -68,6 +73,7 @@ Options:
       --layout NAME   start layout: symmetric | left-right
   -g, --gain X        start sensitivity 0.2-8.0 (default: 1.0)
       --source NAME   start source: system or app name (default: system)
+      --colors PATH   custom colors JSON file (default: colors.json or ~/.config/xvisualizer/colors.json)
       --no-setup      skip the startup setup wizard
       --no-color      disable ANSI colors
   -h, --help          show help
@@ -75,7 +81,7 @@ Options:
 
 Notes:
 
-- `--device`, `--theme`, `--color`, `--layout`, `--gain`, and `--source` accept both `--flag value` and `--flag=value` forms.
+- `--device`, `--theme`, `--color`, `--layout`, `--gain`, `--source`, and `--colors` accept both `--flag value` and `--flag=value` forms.
 - `--theme` also accepts the aliases `1` (classic) and `2` (solid).
 - `--source system` captures the system mix; any other value matches a playing app by id or name fragment.
 - Any startup flag (or a saved config) skips the setup wizard; `--no-setup` always skips it.
@@ -88,8 +94,62 @@ Examples:
 ```bash
 cargo run --release -- --device alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
 cargo run --release -- --theme solid
+cargo run --release -- --colors my-theme.json
 cargo run --release -- --no-color
 ```
+
+## Color configuration (colors.json)
+
+Color schemes are stored externally in `colors.json` so anyone can customize visualizer and UI colors without touching Rust code.
+
+### Search order
+
+The application searches for color configuration in this order:
+1. File passed via `--colors <PATH>`.
+2. `./colors.json` in the current working directory.
+3. `~/.config/xvisualizer/colors.json` (or `$XDG_CONFIG_HOME/xvisualizer/colors.json`).
+4. Built-in defaults if no file is found or if the file contains invalid syntax.
+
+### JSON schema
+
+```json
+{
+  "modes": {
+    "height": [
+      { "threshold": 0.0, "color": "blue" },
+      { "threshold": 0.6, "color": "magenta" },
+      { "threshold": 0.85, "color": "bright_magenta" }
+    ],
+    "frequency": [
+      { "threshold": 0.0, "color": "blue" },
+      { "threshold": 0.2, "color": "magenta" },
+      { "threshold": 0.4, "color": "bright_magenta" },
+      { "threshold": 0.6, "color": "bold magenta" },
+      { "threshold": 0.8, "color": "bold bright_magenta" }
+    ],
+    "mono": "bright_magenta"
+  },
+  "peak": "bright_magenta",
+  "ui": {
+    "title": "bold magenta",
+    "hint": "bright_black"
+  }
+}
+```
+
+### Supported color formats
+
+Colors can be specified as:
+- **Hex RGB (TrueColor):** `"#ff0055"`, `"#3a0ca3"`, `"#4cc9f0"` (or 3-digit `"#f0f"`).
+- **Named ANSI colors:** `black`, `red`, `green`, `yellow`, `blue`, `magenta` (or `purple`), `cyan`, `white`.
+- **Bright ANSI colors:** `bright_black` (or `gray`), `bright_red`, `bright_green`, `bright_yellow`, `bright_blue`, `bright_magenta` (or `pink`), `bright_cyan`, `bright_white`.
+- **Bold modifier:** Prepend `bold ` to any color name or hex code (for example: `"bold #ff00ff"`, `"bold cyan"`).
+- **ANSI 256 number:** `"208"` or `"ansi:208"`.
+- **Simple gradient lists:** You can also specify gradients as a simple array without thresholds:
+  ```json
+  "height": ["#03045e", "#0077b6", "#00b4d8", "#90e0ef", "#caf0f8"]
+  ```
+  The thresholds are distributed automatically and evenly from 0.0 to 1.0.
 
 ## User interface
 
@@ -256,6 +316,7 @@ Standards: `cargo clippy --all-targets` must report zero warnings. `cargo test` 
 - `ctrlc 3`: graceful `Ctrl+C` shutdown.
 - `rustfft 6`: forward FFT for spectrum analysis.
 - `libpulse-binding 2` and `libpulse-simple-binding 2`: blocking monitor capture.
+- `serde 1` and `serde_json 1`: JSON deserialization for customizable color configuration.
 
 ## Limitations
 
