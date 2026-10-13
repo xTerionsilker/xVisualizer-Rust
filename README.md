@@ -1,116 +1,228 @@
 # xvisualizer
 
-Terminal spectrum visualizer for system audio. Captures playback via a PulseAudio monitor source, analyzes it with an FFT pipeline, and renders smooth animated bars in the terminal.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)]()
+[![Rust](https://img.shields.io/badge/Rust-1.85%2B%20(Edition%202024)-orange.svg)]()
 
-## Contents
+**xvisualizer** is a high-performance, real-time terminal spectrum visualizer for Linux audio playback. It captures system output through PulseAudio or PipeWire monitor sources, processes the audio using a low-latency Fast Fourier Transform (FFT) pipeline, and renders smooth, flicker-free spectrum bars with falling peak indicators directly in your terminal.
 
-- [Features](#features)
-- [Requirements](#requirements)
+---
+
+## Table of Contents
+
+- [Overview & Highlights](#overview--highlights)
+- [System Requirements](#system-requirements)
 - [Installation](#installation)
-- [Usage](#usage)
-- [Color configuration (colors.json)](#color-configuration-colorsjson)
-- [User interface](#user-interface)
-- [Capture sources](#capture-sources)
-- [Signal processing](#signal-processing)
-- [Rendering](#rendering)
-- [Project structure](#project-structure)
-- [Customization](#customization)
-- [Development](#development)
-- [Dependencies](#dependencies)
-- [Limitations](#limitations)
+- [Quick Start](#quick-start)
+- [Command-Line Reference](#command-line-reference)
+- [Interactive Controls](#interactive-controls)
+- [Configuration](#configuration)
+  - [Application Settings (`config`)](#application-settings-config)
+  - [Color Schemes (`colors.json`)](#color-schemes-colorsjson)
+- [Architecture & Audio Pipeline](#architecture--audio-pipeline)
+  - [Signal Processing Pipeline](#signal-processing-pipeline)
+  - [Solo Application Capture](#solo-application-capture)
+  - [Rendering Engine](#rendering-engine)
+- [Project Structure](#project-structure)
+- [Development & Testing](#development--testing)
+- [License](#license)
 
-## Features
+---
 
-- System audio capture through the PulseAudio monitor of the default sink (works on PipeWire via its Pulse compatibility layer).
-- Optional solo capture of a single application or window, rerouted through a private null sink while staying audible.
-- 2048-point Hann-windowed FFT mapped onto a logarithmic band grid (30 Hz – 16 kHz).
-- Inertial bar motion: fast attack (~12 ms), soft release (~160 ms), falling peak markers (~0.8 s).
-- Fixed 120 Hz render loop; one buffered write plus flush per frame, no full-screen clear, no flicker.
-- Two bar themes: `Classic` (1-column bars with gaps) and `Solid` (2-column joined bars).
-- Three bar color modes: `Height` (purple shades by level), `Frequency` (purple shades by band), `Mono` (uniform purple).
-- Two spectrum layouts: `Symmetric` (bass in the center, mirrored) and `Left-Right` (bass on the left).
-- Manual sensitivity control (0.2x–8.0x, reset to 1.0x).
-- Startup presets and persistence: `--theme/--color/--layout/--gain/--source/--device`
-  with settings saved to `~/.config/xvisualizer/config` and reused on next run.
-- Capture errors auto-reconnect with backoff; a lost solo app falls back to the system mix.
-- Startup setup wizard: theme → bar color → layout → capture source.
-- In-program menus for theme, color, layout, and capture source; help overlay; pause.
-- Bar count adapts to terminal width (up to 64 bars).
-- Alternate screen with full terminal state restore on exit, including on panic.
-- Honors the [`NO_COLOR`](https://no-color.org/) environment variable.
+## Overview & Highlights
 
-## Requirements
+- **Zero-Configuration Audio Capture:** Automatically detects the default audio playback sink and attaches to its monitor source. Fully compatible with native PulseAudio and PipeWire (`pipewire-pulse`).
+- **Targeted Application Capture (Solo Mode):** Capture audio from a single application or window without capturing background system sounds. The selected stream is dynamically routed through an internal null-sink while remaining fully audible via a low-latency loopback.
+- **Accurate DSP Pipeline:** 2048-sample Hann-windowed FFT mapped over a logarithmic scale (30 Hz – 16 kHz).
+- **Physical Bar Ballistics:** Asymmetric inertia with rapid attack (~12 ms), smooth release (~160 ms), and linear gravity fall on peak markers (~0.8 s full scale).
+- **120 FPS High-Refresh Engine:** Single-buffer cursor repositioning (`ESC[H`) and atomic terminal flush per frame. No full-screen clearing (`clear`), eliminating terminal flicker.
+- **Dynamic Resizing:** Bar count automatically adapts to terminal column width (up to 64 discrete frequency bands) with narrow-window safety padding.
+- **External Color Theming:** Full RGB TrueColor (24-bit hex `#RRGGBB`), 16-color ANSI, and 256-color palettes configured via `colors.json` without modifying or recompiling the code.
+- **Fault-Tolerant Reconnection:** Automatically reconnects with exponential backoff on audio server hiccups; drops cleanly back to the system mix if an application stops playing.
+- **Clean Terminal Lifecycle:** Alternate screen buffer with RAII-guaranteed terminal restoration on exit, interrupt (`Ctrl+C`), or unexpected panic.
+- **Standards Compliant:** Fully honors the [NO_COLOR](https://no-color.org/) standard and the XDG Base Directory specification.
 
-- Linux with PulseAudio or PipeWire, and `pactl` available (used for monitor auto-detection, stream listing, and solo rerouting).
-- Development packages for PulseAudio and pkg-config:
-  - **Debian / Ubuntu / Pop!_OS:** `sudo apt install libpulse-dev pkg-config`
-  - **Fedora / RHEL:** `sudo dnf install pulseaudio-libs-devel pkg-config`
-  - **Arch Linux:** `sudo pacman -S libpulse pkgconf`
-- Rust toolchain that supports edition 2024 (Rust 1.85 or later).
-- Terminal with ANSI escape sequence and UTF-8 support. The following glyphs must render: `█ ▁▂▃▄▅▆▇ ─`.
+---
+
+## System Requirements
+
+### Operating System
+- **Linux** with an active **PulseAudio** or **PipeWire** sound server.
+- The `pactl` utility must be present in `$PATH` (provided by standard sound packages).
+
+### Development Dependencies (Building from Source)
+Compiling `xvisualizer` requires C development headers for `libpulse` and `pkg-config`:
+
+| Distribution | Package Installation Command |
+|---|---|
+| **Ubuntu / Debian / Pop!_OS** | `sudo apt install libpulse-dev pkg-config build-essential` |
+| **Fedora / RHEL** | `sudo dnf install pulseaudio-libs-devel pkg-config gcc` |
+| **Arch Linux / Manjaro** | `sudo pacman -S libpulse pkgconf base-devel` |
+| **openSUSE** | `sudo zypper install libpulse-devel pkg-config` |
+| **Alpine Linux** | `apk add pulseaudio-dev pkgconf build-base` |
+
+### Compiler Toolchain
+- **Rust 1.85+** (Rust Edition 2024 support is required). Ensure your toolchain is up to date via `rustup update`.
+
+### Terminal Compatibility
+- Any terminal supporting UTF-8 and standard ANSI escape sequences.
+- Required Unicode block characters: `█`, `▁`, `▂`, `▃`, `▄`, `▅`, `▆`, `▇`, and horizontal bar `─`.
+
+---
 
 ## Installation
 
-Clone the repository and run the release build:
+### From Source
+
+Clone the repository and compile using Cargo:
 
 ```bash
 git clone https://github.com/xTerion-code/xvisualizer-rust.git
 cd xvisualizer-rust
+cargo build --release
+```
+
+The optimized binary will be placed at `target/release/xvisualizer`.
+
+### Install to System
+
+To install the binary directly into your Cargo binary path (`~/.cargo/bin`):
+
+```bash
+cargo install --path .
+```
+
+---
+
+## Quick Start
+
+Launch `xvisualizer`:
+
+```bash
 cargo run --release
 ```
 
-Quit with `Q` or `Ctrl+C`.
+On your first run, an interactive **4-step Setup Wizard** will guide you through:
+1. **Theme Selection:** `Classic` (thin bars with spacing) or `Solid` (wide joined bars).
+2. **Color Mode:** Gradient by `Height`, gradient by `Frequency`, or `Mono`.
+3. **Spectrum Layout:** `Symmetric` (bass centered, treble mirrored) or `Left-Right` (bass on left).
+4. **Capture Source:** Entire system mix or an isolated running audio application.
 
-## Usage
+Your selections are saved automatically to `~/.config/xvisualizer/config` and reused on future runs. Press `Q` or `Ctrl+C` at any time to exit.
+
+---
+
+## Command-Line Reference
 
 ```text
-xvisualizer [OPTIONS]
-
-Options:
-  -d, --device NAME   Pulse source (default: auto-detected monitor of the default sink)
-  -t, --theme NAME    start theme: classic | solid (default: classic)
-      --color NAME    start color: height | frequency | mono
-      --layout NAME   start layout: symmetric | left-right
-  -g, --gain X        start sensitivity 0.2-8.0 (default: 1.0)
-      --source NAME   start source: system or app name (default: system)
-      --colors PATH   custom colors JSON file (default: colors.json or ~/.config/xvisualizer/colors.json)
-      --no-setup      skip the startup setup wizard
-      --no-color      disable ANSI colors
-  -h, --help          show help
+Usage: xvisualizer [OPTIONS]
 ```
 
-Notes:
+### Options
 
-- `--device`, `--theme`, `--color`, `--layout`, `--gain`, `--source`, and `--colors` accept both `--flag value` and `--flag=value` forms.
-- `--theme` also accepts the aliases `1` (classic) and `2` (solid).
-- `--source system` captures the system mix; any other value matches a playing app by id or name fragment.
-- Any startup flag (or a saved config) skips the setup wizard; `--no-setup` always skips it.
-- Settings are saved to `~/.config/xvisualizer/config` (or `$XDG_CONFIG_HOME`) on exit and reused next run; CLI flags override them.
-- Setting the `NO_COLOR` environment variable has the same effect as `--no-color`.
-- Unknown flags and unknown theme/color/layout names terminate the program with exit code 2 and an error message.
+| Flag | Parameter | Description |
+|---|---|---|
+| `-d`, `--device` | `<NAME>` | Explicit PulseAudio capture source (overrides auto-detection). |
+| `-t`, `--theme` | `<NAME>` | Initial bar theme: `classic` (`1`) or `solid` (`2`). |
+| `--color` | `<NAME>` | Initial bar color mode: `height`, `frequency`, or `mono`. |
+| `--layout` | `<NAME>` | Initial spectrum layout: `symmetric` or `left-right`. |
+| `-g`, `--gain` | `<X>` | Sensitivity multiplier from `0.2` to `8.0` (default: `1.0`). |
+| `--source` | `<NAME>` | Capture source: `system` or case-insensitive app name fragment (e.g. `spotify`). |
+| `--colors` | `<PATH>` | Path to a custom JSON color configuration file (default: `./colors.json`). |
+| `--no-setup` | *(None)* | Skip the startup setup wizard and go straight to the visualizer. |
+| `--no-color` | *(None)* | Disable all ANSI color sequences (also enabled via `NO_COLOR=1`). |
+| `-h`, `--help` | *(None)* | Display command help and exit. |
 
-Examples:
+*Note: All options support both `--flag value` and `--flag=value` formats.*
+
+### Examples
 
 ```bash
-cargo run --release -- --device alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
-cargo run --release -- --theme solid
-cargo run --release -- --colors my-theme.json
-cargo run --release -- --no-color
+# Capture system mix with Solid theme in Left-to-Right layout
+xvisualizer --theme solid --layout left-right
+
+# Isolate audio from Spotify with increased sensitivity
+xvisualizer --source spotify -g 1.5
+
+# Use a custom color configuration file
+xvisualizer --colors /path/to/my-palette.json
+
+# Capture a specific monitor sink explicitly
+xvisualizer --device alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
 ```
 
-## Color configuration (colors.json)
+---
 
-Color schemes are stored externally in `colors.json` so anyone can customize visualizer and UI colors without touching Rust code.
+## Interactive Controls
 
-### Search order
+All controls are accessible via keyboard shortcuts during visualization:
 
-The application searches for color configuration in this order:
-1. File passed via `--colors <PATH>`.
+### Global Visualizer Keys
+
+| Shortcut | Description |
+|---|---|
+| `Space` / `P` | **Pause / Resume** spectrum analysis and peak markers. |
+| `+` / `=` | **Increase sensitivity** (multiplies by 1.25x, up to 8.0x). |
+| `-` / `_` | **Decrease sensitivity** (divides by 1.25x, down to 0.2x). |
+| `G` | **Reset sensitivity** to baseline (1.0x). |
+| `L` | **Toggle layout** between `Symmetric` and `Left-Right`. |
+| `C` | **Cycle color mode** (`Height` → `Frequency` → `Mono`). |
+| `1` / `2` | **Quick-switch theme** (`1`: Classic, `2`: Solid). |
+| `T` / `Tab` / `M` / `F2` | **Open Theme Menu** (arrow keys also trigger). |
+| `S` | **Open Capture Source Menu** (switch between System and running apps). |
+| `H` / `?` / `F1` | **Open Help Overlay**. |
+| `Q` / `Ctrl+C` | **Exit cleanly** (restoring terminal state and audio routing). |
+
+### Menu Navigation
+
+When any menu is open (Theme, Color, Layout, or Source):
+
+| Shortcut | Description |
+|---|---|
+| `Up` / `Down` / `k` / `j` | Move selection up or down. |
+| `Left` / `Right` / `h` / `l` | Move selection (alternate navigation). |
+| `1` – `9` | Select item directly by index. |
+| `Enter` / `Space` | Confirm and apply selection. |
+| `Esc` | Cancel / dismiss menu (or skip remainder of startup wizard). |
+| `R` | *(Source menu only)* Refresh the list of running playback streams. |
+
+---
+
+## Configuration
+
+### Application Settings (`config`)
+
+`xvisualizer` persists user preferences across sessions in compliance with the XDG specification:
+
+- Path: `$XDG_CONFIG_HOME/xvisualizer/config` (typically `~/.config/xvisualizer/config`).
+- Created automatically after completing the initial setup wizard or on normal exit.
+
+Example configuration file:
+
+```ini
+theme=classic
+color=height
+layout=symmetric
+gain=1.00
+# device=alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
+```
+
+Command-line flags always take precedence over saved configuration values.
+
+---
+
+### Color Schemes (`colors.json`)
+
+All visual styling, bar coloring, peak markers, and interface highlights are governed by an external `colors.json` file.
+
+#### File Resolution Hierarchy
+The program searches for color definitions in the following order:
+1. Path provided explicitly via `--colors <PATH>`.
 2. `./colors.json` in the current working directory.
-3. `~/.config/xvisualizer/colors.json` (or `$XDG_CONFIG_HOME/xvisualizer/colors.json`).
-4. Built-in defaults if no file is found or if the file contains invalid syntax.
+3. `$XDG_CONFIG_HOME/xvisualizer/colors.json` (`~/.config/xvisualizer/colors.json`).
+4. Hardcoded internal fallback palette if no configuration file is located or if JSON is invalid.
 
-### JSON schema
+#### Default `colors.json`
 
 ```json
 {
@@ -137,193 +249,132 @@ The application searches for color configuration in this order:
 }
 ```
 
-### Supported color formats
+#### Supported Color Specifications
 
-Colors can be specified as:
-- **Hex RGB (TrueColor):** `"#ff0055"`, `"#3a0ca3"`, `"#4cc9f0"` (or 3-digit `"#f0f"`).
-- **Named ANSI colors:** `black`, `red`, `green`, `yellow`, `blue`, `magenta` (or `purple`), `cyan`, `white`.
-- **Bright ANSI colors:** `bright_black` (or `gray`), `bright_red`, `bright_green`, `bright_yellow`, `bright_blue`, `bright_magenta` (or `pink`), `bright_cyan`, `bright_white`.
-- **Bold modifier:** Prepend `bold ` to any color name or hex code (for example: `"bold #ff00ff"`, `"bold cyan"`).
-- **ANSI 256 number:** `"208"` or `"ansi:208"`.
-- **Simple gradient lists:** You can also specify gradients as a simple array without thresholds:
+Color strings are parsed flexibly:
+- **24-bit TrueColor Hex:** `"#RRGGBB"` (e.g. `"#7b2cbf"`, `"#3a0ca3"`, `"#4cc9f0"`) or 3-digit shorthand `"#RGB"` (`"#f0f"`).
+- **Standard ANSI Names:** `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `purple`, `cyan`, `white`.
+- **Bright ANSI Names:** `bright_black` (or `gray`), `bright_red`, `bright_green`, `bright_yellow`, `bright_blue`, `bright_magenta` (or `pink`), `bright_cyan`, `bright_white`.
+- **ANSI 256 Indices:** Decimal numbers `0` through `255`, or with prefix `"ansi:208"`.
+- **Bold Modifier:** Prepend `bold ` to any color name or hex code (e.g. `"bold #00ffcc"`, `"bold cyan"`).
+- **Simple Gradient Arrays:** In `height` and `frequency` modes, you can provide a plain array of colors without manual thresholds; thresholds will automatically distribute evenly between `0.0` and `1.0`:
   ```json
   "height": ["#03045e", "#0077b6", "#00b4d8", "#90e0ef", "#caf0f8"]
   ```
-  The thresholds are distributed automatically and evenly from 0.0 to 1.0.
 
-## User interface
+---
 
-### Startup wizard
+## Architecture & Audio Pipeline
 
-The application starts in a four-step setup wizard:
-
-1. Theme (`Setup 1/4`)
-2. Bar color (`Setup 2/4`)
-3. Layout (`Setup 3/4`)
-4. Capture source (`Setup 4/4`)
-
-`Enter` applies the current step and advances to the next one. `Esc` skips the remaining setup and goes straight to the visualizer. `Q` quits from any step.
-
-### Visualizer screen
-
-The main screen shows the spectrum bars with falling peak markers and a two-line footer. The first footer line reports the capture source, theme, layout, sensitivity, and color mode; it is temporarily replaced by a 4-second notice whenever the source or sensitivity changes (for example, `Capturing system mix` or `Sensitivity 1.25x`). The second footer line lists the available keys.
-
-### Key reference
-
-Visualizer keys:
-
-| Key | Action |
-| --- | ------ |
-| `T` / `Tab` / `M` / `F2`, or any arrow key | Open the theme menu |
-| `S` | Open the capture source menu |
-| `Space` / `P` | Pause / resume (freezes bars and peaks) |
-| `+` / `=` | Sensitivity up (multiplied by 1.25, clamped to 8.0x) |
-| `-` / `_` | Sensitivity down (divided by 1.25, clamped to 0.2x) |
-| `G` | Reset sensitivity to 1.0x |
-| `L` | Toggle layout (`Symmetric` / `Left-Right`) |
-| `C` | Cycle bar color (`Height` / `Frequency` / `Mono`) |
-| `H` / `?` / `F1` | Toggle the help overlay |
-| `1` / `2` | Quick theme switch (`Classic` / `Solid`) |
-| `Q` or `Ctrl+C` | Quit |
-
-Menu keys (theme, color, layout, source menus):
-
-| Key | Action |
-| --- | ------ |
-| `Up` / `Down` / `Left` / `Right` | Move the selection |
-| `Enter` / `Space` | Apply the selection |
-| `Esc` | Back to the visualizer without applying (cancels the remaining setup when in the wizard) |
-| `1`–`3` | Select an option directly (range depends on the menu) |
-| `R` (source menu only) | Refresh the application list |
-
-The help overlay closes with `Esc`, `Enter`, `Space`, `H`, `?`, or `F1`. Visualizer keys have no effect while it is open.
-
-## Capture sources
-
-Two capture modes are available, selectable at startup (wizard step 4/4) or later with `S`:
-
-- **System mix (row `System`).** Records the monitor source of the default sink: everything audible on the system. The monitor is auto-detected with `pactl`: the monitor matching `<default-sink>.monitor` is preferred, otherwise the first available monitor is used. `--device` overrides the detection.
-- **Single application.** The source menu lists currently playing sink inputs by application and stream name. Selecting one moves that stream to a private null sink (`xviz_cap_<pid>_<time>_<seq>`) whose monitor is recorded. A `module-loopback` (50 ms latency) keeps the application audible through its original sink.
-
-Behavioral notes:
-
-- If the loopback module cannot be loaded, capture continues but the application is muted; the footer notice reports `muted: no loopback`.
-- If solo capture setup fails (for example, the stream ended), the application falls back to the system mix and reports the cause in the footer notice.
-- Returning to `System`, or exiting, drops the solo session: the stream is moved back to its original sink and the helper modules are unloaded. Cleanup also runs on panic.
-- PulseAudio errors during capture are fatal by design: the capture thread stops the whole application instead of spinning silently.
-
-## Signal processing
-
-Pipeline per frame:
-
-```text
-Pulse monitor -> capture thread -> short sample queue -> newest 2048-sample window
-  -> Hann window -> forward FFT -> peak magnitude per log band -> manual gain
-  -> gamma mapping -> inertial smoothing + peak tracking -> frame -> stdout
+```
+  [ PulseAudio / PipeWire ]
+              │
+              ▼ (Stereo S16LE, 48 kHz, fragsize ~10ms)
+    [ audio::CaptureWorker ]
+              │
+              ▼ (Decoded & averaged to Mono f32 in [-1, 1])
+     [ Arc<Mutex<Queue>> ] (Capacity: 8192 samples)
+              │
+              ▼ (Newest 2048-sample window at 120 Hz)
+     [ dsp::Analyzer ]
+        ├── Hann Window Weighting
+        ├── Forward FFT (rustfft)
+        ├── Magnitude Spectrum Calculation
+        ├── Logarithmic Band Pooling (30 Hz – 16 kHz)
+        ├── Gain & Gamma Non-Linearity (γ = 0.6)
+        └── Attack/Release Inertia + Falling Peak Markers
+              │
+              ▼
+   [ visualizer::render ]
+        ├── Dynamic Terminal Width Allocation
+        ├── Symmetric or L-R Mapping
+        ├── Single-Buffer Frame String Construction
+        └── Atomic Stdout Write + Flush (120 Hz)
 ```
 
-Parameters:
+### Signal Processing Pipeline
 
-| Stage | Value |
-| ----- | ----- |
-| Sample rate / format | 48 kHz, stereo S16LE averaged to mono, normalized to [-1, 1] |
-| Capture reads | 512 stereo frames (~10.7 ms) with low-latency `BufferAttr` (`fragsize` ~10 ms) |
-| Sample queue | Newest 8192 mono samples (~170 ms); each frame analyzes the newest 2048 (~43 ms) |
-| FFT | 2048-point forward FFT (`rustfft`), Hann window |
-| Band grid | Logarithmic, 30 Hz – 16 kHz, peak magnitude per band |
-| Reference / gain | Fixed reference magnitude `0.03`, manual gain 0.2x–8.0x, gamma `0.6` so quiet bands stay visible |
-| Bar smoothing | Exponential easing: attack tau ~12 ms (1–2 frames), release tau ~160 ms |
-| Peak markers | Snap to the target instantly, fall linearly at 1.2 units/s (~0.8 s full scale) |
-| Bar count | Up to 64; fitted to terminal width (4-column margin; Classic cell 1+1, Solid cell 2+0) |
-| Symmetric layout | `n` unique bands mirrored to `2n - 1` display bars, bass in the center |
+| Stage | Specification | Purpose |
+|---|---|---|
+| **Audio Format** | Stereo S16LE, 48,000 Hz | High-fidelity standardized capture input. |
+| **Capture Latency** | 512 frames per chunk (~10.7 ms) | Low-latency buffering via PulseAudio `BufferAttr`. |
+| **Analysis Window** | 2048 samples (~42.7 ms) | Provides ~23.4 Hz bin resolution for bass detail. |
+| **Window Function** | Hann Window | Suppresses spectral leakage across FFT bins. |
+| **FFT Engine** | `rustfft 6` | Optimized radix-4 / AVX-accelerated forward FFT. |
+| **Frequency Grid** | Logarithmic, 30 Hz to 16,000 Hz | Accurately models human auditory frequency perception. |
+| **Magnitude Curve** | Reference 0.03, Gamma 0.6 | Balances dynamic range; keeps quiet passages visible. |
+| **Ballistics** | Attack $\tau \approx 12$ ms, Release $\tau \approx 160$ ms | Punchy instantaneous response with smooth, natural decay. |
+| **Peak Tracking** | Fall rate 1.2 units/s (~0.8 s fall) | Distinct falling indicator lines above each bar. |
 
-Typical end-to-end latency is 60–100 ms: ~10 ms fragment + ~21 ms FFT window center + ~8 ms frame + ~20–50 ms Pulse server latency.
+Total end-to-end latency is typically between **60 ms and 100 ms**, providing tight synchronization with audible sound.
 
-## Rendering
+### Solo Application Capture
 
-- 120 Hz frame loop (`dt` clamped to 1–50 ms so smoothing stays stable under lag or resize spikes).
-- One buffered `write` plus `flush` per frame; cursor homed once (`ESC[H`); no full-screen clear.
-- Bar bodies use full blocks (`█`); fractional bar tops use eighth blocks (`▁▂▃▄▅▆▇`); peak markers use `─` (bright purple when colors are enabled).
-- Colors: black background (terminal default) with purple foregrounds. `Height` mode colors rows indigo (low), purple (mid), bright purple (top); `Frequency` mode colors bands indigo → purple → bright purple from bass to treble; `Mono` is uniform bright purple. Peak markers keep their own color in all modes. Menu titles use bold purple.
+When an isolated application is selected from the `S` source menu:
+1. `xvisualizer` creates a private null sink via `module-null-sink` (`sink_name=xviz_cap_<pid>_<time>_<seq>`).
+2. The application's playback stream (`sink-input`) is moved into this private null sink.
+3. The recording worker captures the monitor of the private null sink.
+4. A loopback module (`module-loopback`, latency 50 ms) is attached to route the private null sink to your actual physical speakers, preserving complete audibility.
+5. On stream switch, program exit, or application termination, the stream is seamlessly restored to its original sink and the temporary modules are unloaded.
 
-Example frame:
+### Rendering Engine
 
-```text
-                  █                                                       █
-        █         █         █         █         █         █         █       █
-        █   █     █   █     █   █     █   █     █   █     █   █     █   █   █
-    ─   █   █ ─   █   █ ─   █   █ ─   █   █ ─   █   █ ─   █   █ ─   █   █   █
-    █   █   █ █   █   █ █   █   █ █   █   █ █   █   █ █   █   █ █   █   █   █
-    █   █   █ █   █   █ █   █   █ █   █   █ █   █   █ █   █   █ █   █   █   █
-    █   █   █ █   █   █ █   █   █ █   █   █ █   █   █ █   █   █ █   █   █   █
+- **Frame Rate:** Hard-timed 120 Hz rendering loop with delta-time (`dt`) clamped between 1 ms and 50 ms to guarantee smoothing stability during terminal window resize events.
+- **Buffer Optimization:** A reusable heap buffer (`String::reserve`) formats the entire terminal frame into memory before issuing a single `stdout.write_all()` and `stdout.flush()`.
+- **Character Glyphs:** Full blocks (`█`), 1/8-step sub-block characters (`▁▂▃▄▅▆▇`), and horizontal box-drawing lines (`─`) render high-resolution bar tops and peak markers.
 
-            alsa_output.pci-0000_00_1f.3.analog-stereo.monitor  |  Ctrl+C
-```
+---
 
-The exact appearance depends on the terminal font and width; the bar count scales with the window.
+## Project Structure
 
-## Project structure
+The project is structured into domain-specific modules adhering to clean single-responsibility boundaries:
 
 ```text
 src/
-  main.rs         entry point and frame-loop orchestration
-  args.rs         CLI parsing (device, theme, color, layout, gain, source, setup, color flags) and --help text
-  audio.rs        PulseAudio monitor capture into a sample queue; monitor auto-detection; error slot for reconnect
-  config.rs       settings persistence (~/.config/xvisualizer/config): load/save theme, color, layout, gain, device
-  dsp.rs          Hann window, FFT, log bands, gain/gamma mapping, smoothing, peaks
-  util.rs         manual sensitivity multiplier (+/-, G reset; 0.2x-8.0x), frame text helpers
-  color.rs        bar color modes (Height / Frequency / Mono), ANSI codes, color menu
-  theme.rs        bar-style themes (Classic / Solid: names, geometry, width fitting), theme menu
-  layout.rs       spectrum layouts (Symmetric / Left-Right), mirror mapping, layout menu
-  visualizer.rs   spectrum frame building and footer status
-  ui.rs           screen-state composition (menus, pause, help, setup), app events, shared option list
-  input.rs        keyboard transport, global visualizer keys, menu dispatch, wizard chaining
-  help.rs         help overlay keys and screen
-  source.rs       capture source selection: playback stream listing via pactl, source menu
-  solo.rs         solo null-sink session and stream rerouting via loopback
-  terminal.rs     alternate screen / raw mode setup and restore (RAII)
+├── main.rs         # Application entry point, event orchestration, 120 Hz render loop
+├── args.rs         # Command-line argument parsing and help presentation
+├── audio.rs        # PulseAudio capture worker thread and monitor auto-detection
+├── color.rs        # ColorMode definitions, colors.json parser, bar color resolution
+├── config.rs       # Persistent configuration loading and saving (~/.config/xvisualizer/config)
+├── dsp.rs          # FFT analysis, Hann windowing, log pooling, and bar ballistics
+├── help.rs         # Full-screen keybind help overlay rendering and interaction
+├── input.rs        # Non-blocking terminal keyboard polling and action dispatching
+├── layout.rs       # Symmetric and Left-to-Right bar mappings and layout menu
+├── solo.rs         # Per-application null sink rerouting and loopback management
+├── source.rs       # Stream discovery via pactl and capture source menu
+├── terminal.rs     # Terminal raw mode, alternate screen setup, and RAII restore
+├── theme.rs        # Classic and Solid bar geometry definitions and theme menu
+├── ui.rs           # Screen state root, menu event dispatching, shared option lists
+├── util.rs         # Sensitivity gain tracker, string truncation, text centering
+└── visualizer.rs   # Core spectrum frame assembler and footer status renderer
 ```
 
-Design rules: one file per domain, wired through `main.rs`. Each menu lives next to its own mode/state; `main` owns the instances and passes plain values down. Other modules use only the owning file's public API.
+---
 
-## Customization
+## Development & Testing
 
-| Goal | Location |
-| ---- | -------- |
-| Different source or latency | `audio.rs`: `CaptureSession::switch()`, `BufferAttr`, `READ_FRAMES` |
-| Different solo capture behavior | `solo.rs`: `SoloSession`, null sink and loopback management |
-| Different spectrum | `dsp.rs`: `WINDOW`, Hann table, `F_MIN` / `F_MAX`, `GAMMA`, reference magnitude |
-| Different motion | `dsp.rs`: attack/release time constants, peak fall rate |
-| Different look | `theme.rs` (`dims`, `fit_bar_count`), `color.rs` (`ColorMode`, `bar_color`), `layout.rs` (`LayoutMode`), `visualizer.rs` (`PARTS`, footer) |
-| Different keys | `input.rs` (`handle_visualizer_key`, menu dispatch), per-menu `handle_key` functions, state in `ui.rs` |
+### Verification Suite
 
-Adding a theme requires extending `theme.rs` and `visualizer.rs` together. Adding a color mode requires extending `color.rs` together.
-
-## Development
+All commits adhere to zero-warning standards:
 
 ```bash
-cargo build
-cargo clippy --all-targets
-cargo test
+# Verify code formatting
 cargo fmt --check
+
+# Enforce zero warnings across all targets
+cargo clippy --all-targets
+
+# Execute test suite
+cargo test
 ```
 
-Standards: `cargo clippy --all-targets` must report zero warnings. `cargo test` covers the `pactl` output parsers in `src/source.rs`, the CLI parsing in `src/args.rs`, the config round-trip in `src/config.rs`, and the pure helpers (`util`, `layout`, `theme`); these run without audio hardware. Use `cargo run --release` for representative frame timing. Audio capture, solo rerouting, and rendering require a live Linux audio stack and cannot be verified headlessly.
+### Headless vs. Hardware Testing
+Pure unit tests (covering CLI arguments, config serialization, color parsers, layout mirror math, text truncation, and `pactl` output parser fixtures) run without audio hardware via `cargo test`. Live audio capture and solo rerouting require an active Linux sound stack.
 
-## Dependencies
+---
 
-- `crossterm 0.29`: alternate screen, cursor control, terminal size, keyboard events.
-- `ctrlc 3`: graceful `Ctrl+C` shutdown.
-- `rustfft 6`: forward FFT for spectrum analysis.
-- `libpulse-binding 2` and `libpulse-simple-binding 2`: blocking monitor capture.
-- `serde 1` and `serde_json 1`: JSON deserialization for customizable color configuration.
+## License
 
-## Limitations
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
-- Linux only. Requires PulseAudio or PipeWire with a working Pulse layer and `pactl`.
-- Without `pactl` or without any monitor source, monitor auto-detection yields nothing and capture falls back to the server default source.
-- The application list in the source menu reflects currently playing streams; silent or idle applications do not appear (use `R` to refresh).
-- PulseAudio errors during capture are retried with backoff instead of quitting: the same
-  device is reopened and the footer reports `Audio lost (...) - retrying...`; a solo source
-  that stays gone falls back to the system mix.
-- Minimum usable terminal size is small (bars shrink to a single bar), but very narrow or short windows degrade readability.
+Copyright (c) 2026 xTerion-code
