@@ -33,6 +33,7 @@ pub fn print_help() {
     );
     println!("      --no-setup    skip the startup setup wizard");
     println!("      --no-color    disable ANSI colors");
+    println!("  -v, --version     show version");
     println!("  -h, --help        show this help");
     println!();
     println!("Settings are saved to ~/.config/xvisualizer/config (or $XDG_CONFIG_HOME)");
@@ -62,6 +63,10 @@ pub fn parse_args() -> Args {
             print_help();
             std::process::exit(0);
         }
+        Ok(ParseOutcome::Version) => {
+            println!("xvisualizer {}", env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
         Err(msg) => {
             eprintln!("{msg}");
             std::process::exit(2);
@@ -72,6 +77,7 @@ pub fn parse_args() -> Args {
 pub enum ParseOutcome {
     Args(Args),
     Help,
+    Version,
 }
 
 pub(crate) fn parse_from(
@@ -98,10 +104,14 @@ pub(crate) fn parse_from(
         };
         match flag.as_str() {
             "-h" | "--help" => return Ok(ParseOutcome::Help),
+            "-v" | "--version" => return Ok(ParseOutcome::Version),
             "-d" | "--device" => {
                 let Some(v) = inline.or_else(|| it.next()) else {
                     return Err(format!("error: {flag} requires a device name"));
                 };
+                if v.trim().is_empty() {
+                    return Err(format!("error: {flag} requires a non-empty device name"));
+                }
                 device = Some(v);
             }
             "-t" | "--theme" => {
@@ -154,12 +164,18 @@ pub(crate) fn parse_from(
                 let Some(v) = inline.or_else(|| it.next()) else {
                     return Err("error: --source requires system or an app name".to_string());
                 };
+                if v.trim().is_empty() {
+                    return Err("error: --source requires system or an app name".to_string());
+                }
                 source = Some(v);
             }
             "--colors" | "--colors-file" => {
                 let Some(v) = inline.or_else(|| it.next()) else {
                     return Err("error: --colors requires a file path".to_string());
                 };
+                if v.trim().is_empty() {
+                    return Err("error: --colors requires a file path".to_string());
+                }
                 colors_file = Some(v);
             }
             "--no-setup" => no_setup = true,
@@ -191,6 +207,7 @@ mod tests {
         match parse_from(it, env)? {
             ParseOutcome::Args(a) => Ok(a),
             ParseOutcome::Help => panic!("unexpected help"),
+            ParseOutcome::Version => panic!("unexpected version"),
         }
     }
 
@@ -240,6 +257,20 @@ mod tests {
         assert!(args_of(&["--gain", "99"], false).is_err());
         assert!(args_of(&["--gain", "abc"], false).is_err());
         assert!(args_of(&["--source"], false).is_err());
+        assert!(args_of(&["--source", ""], false).is_err());
+        assert!(args_of(&["-d", ""], false).is_err());
+        assert!(args_of(&["--colors", ""], false).is_err());
+    }
+
+    #[test]
+    fn parses_version_flag() {
+        let it = ["--version".to_string()].into_iter();
+        assert!(matches!(parse_from(it, false), Ok(ParseOutcome::Version)));
+        let it_short = ["-v".to_string()].into_iter();
+        assert!(matches!(
+            parse_from(it_short, false),
+            Ok(ParseOutcome::Version)
+        ));
     }
 
     #[test]

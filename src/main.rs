@@ -36,7 +36,7 @@ fn main() -> std::io::Result<()> {
         stop.store(false, Ordering::SeqCst);
     });
 
-    let colors = color::ColorConfig::load(parsed.colors_file.as_deref());
+    let (colors, color_err) = color::ColorConfig::load(parsed.colors_file.as_deref());
     let cfg = config::load();
     let theme = parsed.theme.or(cfg.theme).unwrap_or(theme::Theme::Classic);
     let color = parsed.color.or(cfg.color).unwrap_or_default();
@@ -51,6 +51,7 @@ fn main() -> std::io::Result<()> {
         || parsed.layout.is_some()
         || parsed.source.is_some()
         || parsed.device.is_some()
+        || parsed.colors_file.is_some()
         || parsed.gain.is_some();
 
     let mut capture = audio::CaptureSession::start(system_monitor.clone(), running.clone());
@@ -64,11 +65,11 @@ fn main() -> std::io::Result<()> {
     // None = system mix; dropping the session moves the stream back
     // and unloads the helper modules.
     let mut solo: Option<SoloSession> = None;
-    let mut notice: Option<(String, Instant)> = None;
+    let mut notice: Option<(String, Instant)> = color_err.map(|msg| (msg, Instant::now()));
     let mut current_monitor = system_monitor.clone();
 
     // `--source` preselects one app by (case-insensitive) name fragment.
-    if let Some(want) = parsed.source.as_deref()
+    if let Some(want) = parsed.source.as_deref().filter(|s| !s.trim().is_empty())
         && !want.eq_ignore_ascii_case("system")
     {
         let apps = source::list_playback_streams();
@@ -190,6 +191,7 @@ fn main() -> std::io::Result<()> {
         }
         if let Some(err) = capture.take_error() {
             retry_count += 1;
+            last_ok = Instant::now();
             if solo.is_some() && retry_count > SOLO_MAX_RETRIES {
                 drop(solo.take());
                 current_monitor = system_monitor.clone();
@@ -214,7 +216,7 @@ fn main() -> std::io::Result<()> {
             capture.switch(current_monitor.clone(), &running);
             reconnect_at = None;
         }
-        if last_ok.elapsed() > Duration::from_secs(5) {
+        if reconnect_at.is_none() && last_ok.elapsed() > Duration::from_secs(5) {
             retry_count = 0;
             last_ok = Instant::now();
         }
@@ -265,23 +267,11 @@ fn main() -> std::io::Result<()> {
             );
         } else if ui.color.open {
             color::render(
-                &mut frame,
-                cols,
-                rows,
-                ui.color.selected,
-                ui.color.current,
-                use_color,
-                &colors,
+                &mut frame, cols, rows, &ui.color, ui.setup, use_color, &colors,
             );
         } else if ui.layout.open {
             layout::render(
-                &mut frame,
-                cols,
-                rows,
-                ui.layout.selected,
-                ui.layout.current,
-                use_color,
-                &colors,
+                &mut frame, cols, rows, &ui.layout, ui.setup, use_color, &colors,
             );
         } else if ui.in_help {
             help::render_help(&mut frame, cols, rows, use_color, &colors);

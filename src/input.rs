@@ -51,11 +51,11 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Action {
     }
     if state.source.open {
         let (outcome, event) = state.source.handle_key(key);
-        if let Some(ev) = event {
-            return Action::Emit(ev);
-        }
         if !matches!(outcome, MenuOutcome::StillOpen) {
             state.setup = false;
+        }
+        if let Some(ev) = event {
+            return Action::Emit(ev);
         }
         return Action::Nothing;
     }
@@ -148,4 +148,25 @@ fn handle_visualizer_key(state: &mut UiState, key: KeyEvent) -> Action {
         _ => {}
     }
     Action::Nothing
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn source_confirm_clears_setup_flag() {
+        let mut state = UiState::with_initial(
+            crate::theme::Theme::Classic,
+            crate::color::ColorMode::Height,
+            crate::layout::LayoutMode::Symmetric,
+            true,
+        );
+        state.source.open = true;
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let action = handle_key(&mut state, key);
+        assert!(!state.setup, "Setup flag should be cleared on confirmation");
+        assert!(matches!(action, Action::Emit(UiEvent::SelectSystem)));
+    }
 }

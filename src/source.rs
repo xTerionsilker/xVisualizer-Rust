@@ -328,11 +328,17 @@ fn write_option(
     let marker: &str = if idx == ctx.selected { "> " } else { "  " };
     let cur: &str = if is_current { "  (current)" } else { "" };
     let sep: &str = if detail.is_empty() { "" } else { " - " };
-    let w = marker.chars().count()
-        + name.chars().count()
-        + sep.chars().count()
-        + detail.chars().count()
-        + cur.chars().count();
+    let overhead = marker.chars().count() + sep.chars().count() + cur.chars().count();
+    let avail = ctx.cols.saturating_sub(overhead);
+    let (name_str, detail_str) = if name.chars().count() + detail.chars().count() > avail {
+        let name_limit = (avail / 3).max(10).min(name.chars().count());
+        let n = crate::util::truncate_chars(name, name_limit);
+        let d = crate::util::truncate_chars(detail, avail.saturating_sub(n.chars().count()));
+        (n, d)
+    } else {
+        (name, detail)
+    };
+    let w = overhead + name_str.chars().count() + detail_str.chars().count();
     let x = center_x(ctx.cols, w);
     push_spaces(frame, x);
     let highlighted = idx == ctx.selected && ctx.use_color;
@@ -340,9 +346,9 @@ fn write_option(
         frame.push_str("\x1b[7m");
     }
     frame.push_str(marker);
-    frame.push_str(name);
+    frame.push_str(name_str);
     frame.push_str(sep);
-    frame.push_str(detail);
+    frame.push_str(detail_str);
     frame.push_str(cur);
     if highlighted {
         frame.push_str("\x1b[0m");

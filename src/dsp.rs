@@ -42,7 +42,7 @@ impl Analyzer {
         let mut edges = Vec::with_capacity(MAX_BARS + 1);
         for i in 0..=MAX_BARS {
             let f = F_MIN * (F_MAX / F_MIN).powf(i as f32 / MAX_BARS as f32);
-            edges.push((f / bin_hz) as usize);
+            edges.push((f / bin_hz).round() as usize);
         }
 
         Self {
@@ -95,13 +95,14 @@ impl Analyzer {
         }
         self.fft.process(&mut self.spectrum);
 
-        for (i, m) in self.mags.iter_mut().enumerate() {
-            let c = self.spectrum[i + 1];
-            *m = (c.re * c.re + c.im * c.im).sqrt() / WINDOW as f32;
+        self.mags[0] = 0.0;
+        for i in 1..WINDOW / 2 {
+            let c = self.spectrum[i];
+            self.mags[i] = (c.re * c.re + c.im * c.im).sqrt() / WINDOW as f32;
         }
 
         for i in 0..n_bars {
-            let lo = self.edges[i * MAX_BARS / n_bars].min(WINDOW / 2 - 1);
+            let lo = self.edges[i * MAX_BARS / n_bars].clamp(1, WINDOW / 2 - 1);
             let hi = self.edges[(i + 1) * MAX_BARS / n_bars]
                 .max(lo + 1)
                 .min(WINDOW / 2);

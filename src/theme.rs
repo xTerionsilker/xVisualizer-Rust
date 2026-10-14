@@ -123,7 +123,7 @@ pub fn render(
 ) {
     frame.clear();
     let _ = write!(frame, "\x1b[H");
-    let lines = 9usize;
+    let lines = 7usize;
     let mut top = rows.saturating_sub(lines) / 2;
     for _ in 0..top {
         frame.push_str("\x1b[K\r\n");
@@ -154,7 +154,7 @@ pub fn render(
     if use_color {
         frame.push_str("\x1b[0m");
     }
-    frame.push_str("\x1b[K\r\n\r\n\x1b[K\r\n");
+    frame.push_str("\x1b[K\r\n\x1b[K\r\n");
 
     for (idx, th) in Theme::all().iter().enumerate() {
         let is_sel = idx == menu.selected;
@@ -242,5 +242,16 @@ mod tests {
     fn narrow_window_shrinks_to_fit() {
         assert_eq!(Theme::Classic.fit_bar_count(3, 64), 1);
         assert_eq!(Theme::Solid.fit_bar_count(1, 64), 1);
+    }
+
+    #[test]
+    fn theme_menu_renders_all_rows() {
+        let mut frame = String::new();
+        let menu = ThemeMenu::new(Theme::Classic);
+        let colors = crate::color::ColorConfig::default();
+        render(&mut frame, 80, 24, &menu, false, false, &colors);
+        // Each rendered line (except the first) begins after a \r\n
+        let line_count = frame.split("\r\n").count();
+        assert_eq!(line_count, 24);
     }
 }
