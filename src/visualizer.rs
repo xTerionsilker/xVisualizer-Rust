@@ -27,17 +27,32 @@ pub struct Visualizer<'a> {
 const PARTS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
-    let n_unique = v.bars.len().min(crate::dsp::MAX_BARS);
+    if v.rows == 0 || v.cols == 0 {
+        frame.clear();
+        return;
+    }
+
     let symmetric = v.layout == LayoutMode::Symmetric;
-    // Symmetric mirrors low -> high bands around the center (bass stays
-    // in the middle, treble goes to both edges); left-to-right maps
-    // each band to one bar directly.
-    let n_bars = if symmetric {
-        display_count(n_unique).min(crate::dsp::MAX_BARS)
+    let cell = v.bar_width + v.gap_width;
+    let max_fit = (v.cols + v.gap_width).checked_div(cell).unwrap_or(0);
+    let initial_unique = v.bars.len().min(crate::dsp::MAX_BARS);
+    let (n_bars, n_unique) = if symmetric {
+        let fit = if max_fit.is_multiple_of(2) {
+            max_fit.saturating_sub(1)
+        } else {
+            max_fit
+        };
+        let bars = display_count(initial_unique)
+            .min(crate::dsp::MAX_BARS)
+            .min(fit);
+        let unique = bars.div_ceil(2);
+        (bars, unique)
     } else {
-        n_unique
+        let bars = initial_unique.min(max_fit);
+        (bars, bars)
     };
-    let area_h = v.rows.saturating_sub(FOOTER_HEIGHT).max(5);
+
+    let area_h = v.rows.saturating_sub(FOOTER_HEIGHT);
 
     // Stack buffers: no per-frame heap allocation for heights.
     let mut bar_h = [0.0f32; crate::dsp::MAX_BARS];
@@ -69,9 +84,9 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
         for _ in 0..pad_x {
             frame.push(' ');
         }
-        // Per-bar colors need a reset between bars; Height mode is uniform
-        // per row so a single prefix suffices, Frequency/Mono vary per bar.
-        let uniform_row = matches!(v.color_mode, ColorMode::Height);
+        // Per-bar colors need a reset between bars; Height and Mono modes are uniform
+        // per row so a single prefix suffices, Frequency varies per bar.
+        let uniform_row = matches!(v.color_mode, ColorMode::Height | ColorMode::Mono);
         if v.use_color && uniform_row {
             frame.push_str(v.colors.bar_color(row, area_h, 0, n_bars, v.color_mode));
         }
@@ -144,15 +159,14 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
             if v.gap_width > 0 && i + 1 < n_bars {
                 if v.use_color {
                     frame.push_str("\x1b[0m");
-                    push_gap(frame, v.gap_width);
+                    push_spaces(frame, v.gap_width);
                     if uniform_row {
                         frame.push_str(v.colors.bar_color(row, area_h, 0, n_bars, v.color_mode));
                     }
                 } else {
-                    push_gap(frame, v.gap_width);
+                    push_spaces(frame, v.gap_width);
                 }
-            }
-            if v.use_color && !uniform_row {
+            } else if v.use_color && !uniform_row {
                 frame.push_str("\x1b[0m");
             }
         }
@@ -165,38 +179,50 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
     // Footer without per-frame String allocation: the only formatting is
     // the tiny gain number; status width is counted from parts.
     let gain_text = format!("{:.1}", v.gain);
+    let max_text = v.cols.saturating_sub(4);
     let status_w = match v.notice {
-        Some(msg) => truncate_chars(msg, 60).chars().count(),
-        None if v.paused => {
-            "Paused - Space to resume  |  ".chars().count()
-                + v.layout.name().chars().count()
-                + "  |  ".chars().count()
-                + gain_text.chars().count()
-                + "x  |  ".chars().count()
-                + v.color_mode.name().chars().count()
-        }
-        None => {
-            truncate_chars(v.source, 24).chars().count()
-                + "  |  ".chars().count()
-                + v.theme_name.chars().count()
-                + "  |  ".chars().count()
-                + v.layout.name().chars().count()
-                + "  |  ".chars().count()
-                + gain_text.chars().count()
-                + "x  |  ".chars().count()
-                + v.color_mode.name().chars().count()
-        }
+        Some(msg) => truncate_chars(msg, max_text).chars().count(),
+        None if v.paused => (27
+            + v.layout.name().chars().count()
+            + 5
+            + gain_text.chars().count()
+            + 5
+            + v.color_mode.name().chars().count())
+        .min(v.cols),
+        None => (truncate_chars(v.source, 24).chars().count()
+            + 5
+            + v.theme_name.chars().count()
+            + 5
+            + v.layout.name().chars().count()
+            + 5
+            + gain_text.chars().count()
+            + 5
+            + v.color_mode.name().chars().count())
+        .min(v.cols),
     };
     let keys = "T-themes S-source Space-pause L-layout +/-gain G-reset C-color ?-help Q-quit";
     // Bar rows each end with `\r\n`, so the cursor is already on the first
     // footer line: write status directly, newline only before the keys line.
-    // A leading `\r\n` before both lines would make the frame one line
-    // taller than the screen and scroll on every frame (duplicated rows).
     push_spaces(frame, v.cols.saturating_sub(status_w) / 2);
     match v.notice {
-        Some(msg) => frame.push_str(truncate_chars(msg, 60)),
+        Some(msg) => {
+            if v.use_color {
+                frame.push_str(v.colors.title());
+            }
+            frame.push_str(truncate_chars(msg, max_text));
+            if v.use_color {
+                frame.push_str("\x1b[0m");
+            }
+        }
         None if v.paused => {
-            frame.push_str("Paused - Space to resume  |  ");
+            if v.use_color {
+                frame.push_str(v.colors.title());
+            }
+            frame.push_str("Paused");
+            if v.use_color {
+                frame.push_str("\x1b[0m");
+            }
+            frame.push_str(" - Space to resume  |  ");
             frame.push_str(v.layout.name());
             frame.push_str("  |  ");
             frame.push_str(&gain_text);
@@ -215,16 +241,20 @@ pub fn render_visualizer(frame: &mut String, v: &Visualizer) {
             frame.push_str(v.color_mode.name());
         }
     }
-    frame.push_str("\x1b[K\r\n");
-    let kw = keys.chars().count();
-    push_spaces(frame, v.cols.saturating_sub(kw) / 2);
-    frame.push_str(keys);
-    frame.push_str("\x1b[K");
-}
-
-fn push_gap(frame: &mut String, gap_width: usize) {
-    for _ in 0..gap_width {
-        frame.push(' ');
+    if v.rows >= 2 {
+        frame.push_str("\x1b[K\r\n");
+        let kw = keys.chars().count().min(v.cols);
+        push_spaces(frame, v.cols.saturating_sub(kw) / 2);
+        if v.use_color {
+            frame.push_str(v.colors.hint());
+        }
+        frame.push_str(truncate_chars(keys, v.cols));
+        if v.use_color {
+            frame.push_str("\x1b[0m");
+        }
+        frame.push_str("\x1b[K");
+    } else {
+        frame.push_str("\x1b[K");
     }
 }
 
@@ -238,5 +268,45 @@ fn push_peak(frame: &mut String, bar_width: usize, use_color: bool, peak_color: 
     }
     if use_color {
         frame.push_str("\x1b[0m");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_never_exceeds_terminal_rows() {
+        let colors = ColorConfig::default();
+        let bars = vec![0.5f32; 38];
+        let peaks = vec![0.8f32; 38];
+        for (cols, rows) in [(80, 24), (40, 6), (30, 2), (20, 1)] {
+            let mut frame = String::new();
+            render_visualizer(
+                &mut frame,
+                &Visualizer {
+                    bars: &bars,
+                    peaks: &peaks,
+                    cols,
+                    rows,
+                    bar_width: 1,
+                    gap_width: 1,
+                    use_color: false,
+                    source: "test",
+                    theme_name: "Classic",
+                    notice: None,
+                    color_mode: ColorMode::Height,
+                    layout: LayoutMode::Symmetric,
+                    paused: false,
+                    gain: 1.0,
+                    colors: &colors,
+                },
+            );
+            let line_count = frame.split("\r\n").count();
+            assert!(
+                line_count <= rows,
+                "Rendered {line_count} lines for terminal rows {rows}"
+            );
+        }
     }
 }

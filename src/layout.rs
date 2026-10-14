@@ -126,25 +126,31 @@ pub fn render(
     frame: &mut String,
     cols: usize,
     rows: usize,
-    selected: usize,
-    current: LayoutMode,
+    menu: &LayoutMenu,
+    setup: bool,
     use_color: bool,
     colors: &crate::color::ColorConfig,
 ) {
     let modes = LayoutMode::all();
     let options: Vec<(String, bool)> = modes
         .iter()
-        .map(|m| (format!("{}  [{}]", m.name(), m.desc()), *m == current))
+        .map(|m| (format!("{}  [{}]", m.name(), m.desc()), *m == menu.current))
         .collect();
+    let title = if setup {
+        "Setup 3/4 - Select layout"
+    } else {
+        "Select layout"
+    };
     render_choice(
         frame,
         cols,
         rows,
         &ChoiceMenu {
-            title: "Setup 3/4 - Select layout",
+            title,
             options: &options,
-            selected,
+            selected: menu.selected,
             quick_hint: "1 / 2 - quick select",
+            setup,
         },
         use_color,
         colors,

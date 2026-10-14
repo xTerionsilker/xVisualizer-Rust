@@ -77,7 +77,7 @@ Compiling `xvisualizer` requires C development headers for `libpulse` and `pkg-c
 Clone the repository and compile using Cargo:
 
 ```bash
-git clone https://github.com/xTerion-code/xvisualizer-rust.git
+git clone https://github.com/xTerionsilker/xvisualizer-rust.git
 cd xvisualizer-rust
 cargo build --release
 ```
@@ -377,4 +377,4 @@ Pure unit tests (covering CLI arguments, config serialization, color parsers, la
 
 This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
-Copyright (c) 2026 xTerion-code
+Copyright (c) 2026 xTerionsilker

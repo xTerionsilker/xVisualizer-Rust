@@ -51,7 +51,9 @@ pub(crate) fn step_wrap(selected: &mut usize, dir: i32, len: usize) {
 
 pub(crate) fn choice_key(key: KeyEvent, selected: &mut usize, len: usize) -> MenuOutcome {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => step_wrap(selected, -1, len),
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') | KeyCode::BackTab => {
+            step_wrap(selected, -1, len)
+        }
         KeyCode::Left | KeyCode::Char('h') => step_wrap(selected, -1, len),
         KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => step_wrap(selected, 1, len),
         KeyCode::Right | KeyCode::Char('l') => step_wrap(selected, 1, len),
@@ -108,6 +110,7 @@ pub(crate) struct ChoiceMenu<'a> {
     pub(crate) options: &'a [(String, bool)],
     pub(crate) selected: usize,
     pub(crate) quick_hint: &'a str,
+    pub(crate) setup: bool,
 }
 
 pub(crate) fn render_choice(
@@ -120,7 +123,7 @@ pub(crate) fn render_choice(
 ) {
     frame.clear();
     let _ = write!(frame, "\x1b[H");
-    let lines = menu.options.len() + 6;
+    let lines = menu.options.len() + 5;
     let mut top = rows.saturating_sub(lines) / 2;
     for _ in 0..top {
         frame.push_str("\x1b[K\r\n");
@@ -146,7 +149,7 @@ pub(crate) fn render_choice(
     if use_color {
         frame.push_str("\x1b[0m");
     }
-    frame.push_str("\x1b[K\r\n\r\n\x1b[K\r\n");
+    frame.push_str("\x1b[K\r\n\x1b[K\r\n");
 
     for (idx, (label, is_cur)) in menu.options.iter().enumerate() {
         let is_sel = idx == menu.selected;
@@ -172,7 +175,11 @@ pub(crate) fn render_choice(
     }
 
     frame.push_str("\x1b[K\r\n");
-    let mid = "  |  Enter - next  |  Esc - skip setup  |  Q - quit";
+    let mid = if menu.setup {
+        "  |  Enter - next  |  Esc - skip setup  |  Q - quit"
+    } else {
+        "  |  Enter - apply  |  Esc - back  |  Q - quit"
+    };
     let bx = center_x(cols, menu.quick_hint.chars().count() + mid.chars().count());
     push_spaces(frame, bx);
     if use_color {

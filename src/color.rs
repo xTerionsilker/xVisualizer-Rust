@@ -145,15 +145,38 @@ impl ColorConfig {
     }
 
     /// Finds and loads color configuration from file, falling back to defaults.
-    pub fn load(explicit: Option<&str>) -> Self {
-        let path = find_colors_file(explicit);
-        if let Some(p) = path
-            && let Ok(text) = std::fs::read_to_string(&p)
-            && let Ok(cfg) = Self::from_json(&text)
-        {
-            return cfg;
+    pub fn load(explicit: Option<&str>) -> (Self, Option<String>) {
+        if let Some(p) = explicit {
+            let path = PathBuf::from(p);
+            if !path.exists() {
+                return (
+                    Self::default(),
+                    Some(format!("Colors file '{p}' not found, using defaults")),
+                );
+            }
+            match std::fs::read_to_string(&path) {
+                Ok(text) => match Self::from_json(&text) {
+                    Ok(cfg) => (cfg, None),
+                    Err(e) => (
+                        Self::default(),
+                        Some(format!("Colors JSON '{p}' invalid: {e}")),
+                    ),
+                },
+                Err(e) => (
+                    Self::default(),
+                    Some(format!("Cannot read colors file '{p}': {e}")),
+                ),
+            }
+        } else {
+            let path = find_colors_file(None);
+            if let Some(p) = path
+                && let Ok(text) = std::fs::read_to_string(&p)
+                && let Ok(cfg) = Self::from_json(&text)
+            {
+                return (cfg, None);
+            }
+            (Self::default(), None)
         }
-        Self::default()
     }
 
     /// Parses color configuration from JSON string.
@@ -199,9 +222,7 @@ impl ColorConfig {
 pub fn find_colors_file(explicit: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = explicit {
         let path = PathBuf::from(p);
-        if path.exists() {
-            return Some(path);
-        }
+        return if path.exists() { Some(path) } else { None };
     }
     let cwd_file = Path::new("colors.json");
     if cwd_file.exists() {
@@ -249,7 +270,8 @@ pub fn parse_color_str(s: &str) -> String {
         };
     }
 
-    if let Some(code) = named_color_code(rem) {
+    let normalized = rem.replace('-', "_");
+    if let Some(code) = named_color_code(&normalized) {
         return if bold {
             format!("\x1b[1;{code}m")
         } else {
@@ -257,7 +279,12 @@ pub fn parse_color_str(s: &str) -> String {
         };
     }
 
-    let ansi_num = rem.strip_prefix("ansi:").unwrap_or(rem).parse::<u8>().ok();
+    let ansi_num = rem
+        .strip_prefix("ansi:")
+        .map(str::trim)
+        .unwrap_or(rem)
+        .parse::<u8>()
+        .ok();
     if let Some(n) = ansi_num {
         return if bold {
             format!("\x1b[1;38;5;{n}m")
@@ -335,7 +362,11 @@ enum RawColorStops {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawStop {
-    WithThreshold { threshold: f32, color: String },
+    WithThreshold {
+        #[serde(default)]
+        threshold: f32,
+        color: String,
+    },
     ColorOnly(String),
 }
 
@@ -438,25 +469,31 @@ pub fn render(
     frame: &mut String,
     cols: usize,
     rows: usize,
-    selected: usize,
-    current: ColorMode,
+    menu: &ColorMenu,
+    setup: bool,
     use_color: bool,
     colors: &ColorConfig,
 ) {
     let modes = ColorMode::all();
     let options: Vec<(String, bool)> = modes
         .iter()
-        .map(|m| (format!("{}  [{}]", m.name(), m.desc()), *m == current))
+        .map(|m| (format!("{}  [{}]", m.name(), m.desc()), *m == menu.current))
         .collect();
+    let title = if setup {
+        "Setup 2/4 - Select bar color"
+    } else {
+        "Select bar color"
+    };
     render_choice(
         frame,
         cols,
         rows,
         &ChoiceMenu {
-            title: "Setup 2/4 - Select bar color",
+            title,
             options: &options,
-            selected,
+            selected: menu.selected,
             quick_hint: "1 / 2 / 3 - quick select",
+            setup,
         },
         use_color,
         colors,
@@ -476,6 +513,14 @@ mod tests {
         assert_eq!(parse_color_str("bold #00ff00"), "\x1b[1;38;2;0;255;0m");
         assert_eq!(parse_color_str("#00f"), "\x1b[38;2;0;0;255m");
         assert_eq!(parse_color_str("ansi:208"), "\x1b[38;5;208m");
+        assert_eq!(parse_color_str("ansi: 208"), "\x1b[38;5;208m");
+        assert_eq!(parse_color_str("bright-magenta"), "\x1b[95m");
+        assert_eq!(parse_color_str("dark-gray"), "\x1b[90m");
+    }
+
+    #[test]
+    fn explicit_colors_file_does_not_fall_back_on_missing() {
+        assert_eq!(find_colors_file(Some("/nonexistent/custom.json")), None);
     }
 
     #[test]

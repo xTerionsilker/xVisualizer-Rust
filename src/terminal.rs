@@ -34,5 +34,5 @@ pub fn enter(out: &mut impl Write) -> io::Result<TerminalGuard> {
 // Raw mode also disables `\n` -> `\r\n` translation (see render.rs).
 pub fn size() -> (usize, usize) {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
-    (cols as usize, rows as usize)
+    (cols.max(1) as usize, rows.max(1) as usize)
 }
