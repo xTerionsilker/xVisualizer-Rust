@@ -12,13 +12,13 @@ Single-crate Rust TUI app (`edition 2024`): terminal ASCII spectrum visualizer c
 
 ## Code rules
 
-- Keep code modular by domain: one file = one cohesive domain (state + keys + render live together). Current split: `args` / `audio` / `config` (settings persistence) / `dsp` / `color` (modes + menu) / `theme` (themes + menu) / `layout` (modes + mapping + menu) / `source` (streams + menu) / `ui` (screen state, events, shared option-list screen) / `util` (gain, text helpers) / `input` / `visualizer` / `help` / `solo` / `terminal`. Feature state lives in the feature's own file (`main` owns it and passes plain values down); other modules only call that file's public API.
+- Keep code modular by domain: one file = one cohesive domain (state + keys + render live together). Current split: `args` / `audio` / `config` (settings persistence) / `dsp` / `color` (modes + menu) / `theme` (themes + menu) / `layout` (modes + mapping + menu) / `source` (streams + solo + menu) / `ui` (screen state, events, shared option-list screen) / `util` (gain, text helpers) / `input` / `visualizer` / `help` / `terminal`. Feature state lives in the feature's own file (`main` owns it and passes plain values down); other modules only call that file's public API.
 - Comments: minimal but practical — only where the logic is non-obvious (timing constants, PulseAudio quirks, render escape sequences). No comment per line, no restating what the code says.
 - English only: all code, identifiers, comments, CLI output, and docs strictly in English.
 
 ## Gotchas
 
-- `src/audio.rs` and solo-capture in `src/solo.rs` shell out to `pactl`/`pactl`-managed Pulse/PipeWire and need a live Linux audio stack. Do not try to verify capture, solo rerouting (`SoloSession` null-sink + loopback), or rendering headlessly — there is no mock/fixture for them.
+- `src/audio.rs` and solo-capture in `src/source.rs` shell out to `pactl`/`pactl`-managed Pulse/PipeWire and need a live Linux audio stack. Do not try to verify capture, solo rerouting (`SoloSession` null-sink + loopback), or rendering headlessly — there is no mock/fixture for them.
 - On Pulse failure `capture_loop` reports the error through the shared slot and exits the worker; `main` retries the same device with backoff and falls back from a dead solo source to the system mix. Never restore the old fatal `running=false` behavior.
 - `CaptureSession::switch()` joins the old worker thread and clears the queue before spawning a new one. Keep that order; reusing the queue without clearing plays stale audio.
 - Frame loop in `src/main.rs`: single buffered `write` + `flush` per frame at ~120 Hz, `dt` clamped to `0.001–0.05` s. Preserve both when touching timing/smoothing.
