@@ -9,7 +9,7 @@
 
 **xvisualizer** is a high-performance, real-time terminal spectrum visualizer for Linux audio playback. It captures the system mix (or a single application) through PulseAudio monitor sources, analyzes it with a low-latency Fast Fourier Transform pipeline, and renders flicker-free spectrum bars with falling peak indicators directly in the terminal.
 
-Current version is **0.1.0**. The whole visual language is built from Unicode block glyphs (`█ ▁▂▃▄▅▆▇`) and box-drawing rules (`─`), so it renders identically on any terminal that speaks UTF-8 and ANSI escapes — no GPU, no image protocol, no external binary.
+Current version is **1.0.0**. The whole visual language is built from Unicode block glyphs (`█ ▁▂▃▄▅▆▇`) and box-drawing rules (`─`), so it renders identically on any terminal that speaks UTF-8 and ANSI escapes — no GPU, no image protocol, no external binary.
 
 ---
 
