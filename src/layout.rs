@@ -1,6 +1,6 @@
 use crossterm::event::KeyEvent;
 
-use crate::ui::{ChoiceMenu, MenuOutcome, choice_key, render_choice};
+use crate::ui::{Choice, ChoiceMenu, MenuOutcome, choice_key, render_choice};
 
 /// Spectrum layout: mirrored around the center (bass in the middle)
 /// or plain left-to-right (bass on the left, treble on the right).
@@ -11,44 +11,17 @@ pub enum LayoutMode {
     LeftToRight,
 }
 
-impl LayoutMode {
-    pub fn all() -> [LayoutMode; 2] {
-        [LayoutMode::Symmetric, LayoutMode::LeftToRight]
-    }
+impl Choice for LayoutMode {
+    const ALL: &'static [LayoutMode] = &[LayoutMode::Symmetric, LayoutMode::LeftToRight];
+    const TABLE: &'static [(&'static str, &'static str)] = &[
+        ("Symmetric", "mirrored, bass in the center"),
+        ("Left-Right", "bass left, treble right"),
+    ];
 
-    pub fn index(self) -> usize {
+    fn aliases(self) -> &'static [&'static str] {
         match self {
-            LayoutMode::Symmetric => 0,
-            LayoutMode::LeftToRight => 1,
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            LayoutMode::Symmetric => LayoutMode::LeftToRight,
-            LayoutMode::LeftToRight => LayoutMode::Symmetric,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            LayoutMode::Symmetric => "Symmetric",
-            LayoutMode::LeftToRight => "Left-Right",
-        }
-    }
-
-    pub fn desc(self) -> &'static str {
-        match self {
-            LayoutMode::Symmetric => "mirrored, bass in the center",
-            LayoutMode::LeftToRight => "bass left, treble right",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<LayoutMode> {
-        match s.to_lowercase().as_str() {
-            "symmetric" | "mirror" | "1" => Some(LayoutMode::Symmetric),
-            "left-right" | "leftright" | "left" | "ltr" | "2" => Some(LayoutMode::LeftToRight),
-            _ => None,
+            LayoutMode::LeftToRight => &["left", "leftright", "ltr"],
+            LayoutMode::Symmetric => &["mirror"],
         }
     }
 }
@@ -80,20 +53,12 @@ pub struct LayoutMenu {
 }
 
 impl LayoutMenu {
-    pub fn new() -> Self {
+    pub fn new(current: LayoutMode) -> Self {
         Self {
-            current: LayoutMode::default(),
-            selected: LayoutMode::default().index(),
+            current,
+            selected: current.index(),
             open: false,
         }
-    }
-
-    pub fn with(current: LayoutMode) -> Self {
-        let mut m = Self::new();
-        m.current = current;
-        m.selected = current.index();
-        m.open = false;
-        m
     }
 
     pub fn open(&mut self) {
@@ -106,9 +71,9 @@ impl LayoutMenu {
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> MenuOutcome {
-        match choice_key(key, &mut self.selected, LayoutMode::all().len()) {
+        match choice_key(key, &mut self.selected, LayoutMode::ALL.len()) {
             MenuOutcome::Confirmed => {
-                self.current = LayoutMode::all()[self.selected];
+                self.current = LayoutMode::ALL[self.selected];
                 self.open = false;
                 MenuOutcome::Confirmed
             }
@@ -131,25 +96,20 @@ pub fn render(
     use_color: bool,
     colors: &crate::color::ColorConfig,
 ) {
-    let modes = LayoutMode::all();
-    let options: Vec<(String, bool)> = modes
-        .iter()
-        .map(|m| (format!("{}  [{}]", m.name(), m.desc()), *m == menu.current))
-        .collect();
-    let title = if setup {
-        "Setup 3/4 - Select layout"
-    } else {
-        "Select layout"
-    };
     render_choice(
         frame,
         cols,
         rows,
         &ChoiceMenu {
-            title,
-            options: &options,
+            title: if setup {
+                "Setup 3/4 - Select layout"
+            } else {
+                "Select layout"
+            },
+            options: LayoutMode::TABLE,
+            current: menu.current.index(),
             selected: menu.selected,
-            quick_hint: "1 / 2 - quick select",
+            quick_hint: menu.current.quick_hint(),
             setup,
         },
         use_color,
@@ -180,5 +140,14 @@ mod tests {
     fn single_band_maps_to_zero() {
         assert_eq!(spectrum_index(5, 1), 0);
         assert_eq!(spectrum_index(0, 0), 0);
+    }
+
+    #[test]
+    fn mirror_mapping_stays_inside_the_spectrum() {
+        for unique in 1..=32usize {
+            for d in 0..display_count(unique) {
+                assert!(spectrum_index(d, unique) < unique);
+            }
+        }
     }
 }

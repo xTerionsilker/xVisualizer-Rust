@@ -1,3 +1,8 @@
+//! Entrypoint: argument/config resolution, terminal setup and the frame loop.
+//! Runtime session state (capture worker, solo rerouting, reconnect policy)
+//! lives in `app`; every screen renders itself from plain values passed down.
+
+mod app;
 mod args;
 mod audio;
 mod color;
@@ -19,15 +24,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::source::{CaptureTarget, SoloSession};
-use crate::ui::{UiEvent, UiState};
+use crate::app::App;
+use crate::layout::LayoutMode;
+use crate::source::CaptureTarget;
+use crate::ui::{Choice, UiEvent, UiState};
 
-const NOTICE_TIME: Duration = Duration::from_secs(4);
-const SOLO_MAX_RETRIES: u32 = 5;
+/// Frame budget of the render loop (~120 Hz).
+const FRAME_TIME: Duration = Duration::from_nanos(1_000_000_000 / 120);
 
 fn main() -> std::io::Result<()> {
     let parsed = args::parse_args();
-    const FRAME_TIME: Duration = Duration::from_nanos(1_000_000_000 / 120);
+
     let running = Arc::new(AtomicBool::new(true));
     let stop = running.clone();
     let _ = ctrlc::set_handler(move || {
@@ -39,9 +46,10 @@ fn main() -> std::io::Result<()> {
     let theme = parsed.theme.or(cfg.theme).unwrap_or(theme::Theme::Classic);
     let color = parsed.color.or(cfg.color).unwrap_or_default();
     let layout_mode = parsed.layout.or(cfg.layout).unwrap_or_default();
-    let gain_value = parsed.gain.or(cfg.gain).unwrap_or(1.0);
-    let explicit_device = parsed.device.clone().or(cfg.device);
-    let system_monitor = explicit_device.clone().or_else(audio::detect_monitor);
+    let gain = parsed.gain.or(cfg.gain).unwrap_or(1.0);
+    // Only an explicit device is persisted; the auto-detected monitor is not.
+    let device = parsed.device.clone().or(cfg.device);
+    // Any explicit preference means the user already chose: no wizard.
     let skip_setup = parsed.no_setup
         || cfg.found
         || parsed.theme.is_some()
@@ -52,58 +60,18 @@ fn main() -> std::io::Result<()> {
         || parsed.colors_file.is_some()
         || parsed.gain.is_some();
 
-    let mut capture = audio::CaptureSession::start(system_monitor.clone(), running.clone());
-
-    thread::sleep(Duration::from_millis(120));
-
-    let mut analyzer = dsp::Analyzer::new();
-    let mut gain = util::Gain::with(gain_value);
+    let mut app = App::new(device.clone(), gain, running.clone());
+    if let Some(msg) = color_err {
+        app.notify(msg);
+    }
     let mut ui = UiState::with_initial(theme, color, layout_mode, !skip_setup);
 
-    // None = system mix; dropping the session moves the stream back
-    // and unloads the helper modules.
-    let mut solo: Option<SoloSession> = None;
-    let mut notice: Option<(String, Instant)> = color_err.map(|msg| (msg, Instant::now()));
-    let mut current_monitor = system_monitor.clone();
-
-    // `--source` preselects one app by (case-insensitive) name fragment.
-    if let Some(want) = parsed.source.as_deref().filter(|s| !s.trim().is_empty())
-        && !want.eq_ignore_ascii_case("system")
-    {
-        let apps = source::list_playback_streams();
-        let needle = want.to_lowercase();
-        let hit = apps.iter().find(|a| {
-            a.input.to_string() == want
-                || a.app.to_lowercase().contains(&needle)
-                || a.label().to_lowercase().contains(&needle)
-        });
-        match hit {
-            Some(app) => match SoloSession::start(app) {
-                Ok(session) => {
-                    current_monitor = Some(session.monitor_source());
-                    capture.switch(current_monitor.clone(), &running);
-                    ui.source.target = CaptureTarget::Stream(app.clone());
-                    notice = Some((
-                        format!("Capturing {} (still audible)", app.label()),
-                        Instant::now(),
-                    ));
-                }
-                Err(e) => {
-                    notice = Some((
-                        format!("Source '{want}' failed, using system: {e}"),
-                        Instant::now(),
-                    ));
-                }
-            },
-            None => {
-                notice = Some((
-                    format!("Source '{want}' not playing, using system"),
-                    Instant::now(),
-                ));
-            }
-        }
+    // `--source` preselects one app by sink-input id or name fragment.
+    if let Some(want) = parsed.source.as_deref() {
+        ui.source.target = app.select_named(want);
     }
 
+    let use_color = !parsed.no_color;
     let mut stdout = std::io::stdout();
     let _guard = terminal::enter(&mut stdout)?;
     // Panics would otherwise leave raw mode / alternate screen on.
@@ -113,111 +81,35 @@ fn main() -> std::io::Result<()> {
         default_hook(info);
     }));
 
-    // Single write + flush per frame to avoid flicker.
+    let mut events: Vec<UiEvent> = Vec::new();
+    // Buffers reused every frame: the hot path allocates nothing.
     let mut frame = String::with_capacity(80 * 30);
+    let mut status = String::with_capacity(96);
+    let mut source_label = String::new();
     let mut prev = Instant::now();
-    // Auto-reconnect state: same device is retried with backoff, solo
-    // falls back to the system mix after repeated failures.
-    let mut retry_count: u32 = 0;
-    let mut reconnect_at: Option<Instant> = None;
-    let mut last_ok = Instant::now();
 
     while running.load(Ordering::SeqCst) {
-        for event in input::poll_keys(&mut ui, &running) {
+        for event in input::poll_keys(&mut ui, &running, &mut events) {
             match event {
                 UiEvent::SelectSystem => {
-                    drop(solo.take());
-                    current_monitor = system_monitor.clone();
-                    capture.switch(current_monitor.clone(), &running);
-                    ui.source.target = CaptureTarget::System;
-                    retry_count = 0;
-                    reconnect_at = None;
-                    notice = Some(("Capturing system mix".to_string(), Instant::now()));
+                    ui.source.target = app.select(&CaptureTarget::System);
                 }
-                UiEvent::SelectStream(app) => {
-                    drop(solo.take());
-                    match SoloSession::start(&app) {
-                        Ok(session) => {
-                            let dev = Some(session.monitor_source());
-                            current_monitor = dev.clone();
-                            capture.switch(dev, &running);
-                            if session.loopback_active() {
-                                notice = Some((
-                                    format!("Capturing {} (still audible)", app.label()),
-                                    Instant::now(),
-                                ));
-                            } else {
-                                notice = Some((
-                                    format!("Capturing {} (muted: no loopback)", app.label()),
-                                    Instant::now(),
-                                ));
-                            }
-                            solo = Some(session);
-                            retry_count = 0;
-                            reconnect_at = None;
-                        }
-                        Err(e) => {
-                            drop(solo.take());
-                            current_monitor = system_monitor.clone();
-                            capture.switch(current_monitor.clone(), &running);
-                            ui.source.target = CaptureTarget::System;
-                            retry_count = 0;
-                            reconnect_at = None;
-                            notice = Some((
-                                format!("Source switch failed, back to system: {e}"),
-                                Instant::now(),
-                            ));
-                        }
-                    }
+                UiEvent::SelectStream(stream) => {
+                    ui.source.target = app.select(&CaptureTarget::Stream(stream.clone()));
                 }
-                UiEvent::GainUp => {
-                    gain.up();
-                    notice = Some((format!("Sensitivity {:.2}x", gain.value()), Instant::now()));
-                }
-                UiEvent::GainDown => {
-                    gain.down();
-                    notice = Some((format!("Sensitivity {:.2}x", gain.value()), Instant::now()));
-                }
-                UiEvent::GainReset => {
-                    gain.reset();
-                    notice = Some(("Sensitivity 1.00x".to_string(), Instant::now()));
-                }
+                UiEvent::GainUp => app.gain_up(),
+                UiEvent::GainDown => app.gain_down(),
+                UiEvent::GainReset => app.gain_reset(),
             }
         }
         if !running.load(Ordering::SeqCst) {
             break;
         }
-        if let Some(err) = capture.take_error() {
-            retry_count += 1;
-            last_ok = Instant::now();
-            if solo.is_some() && retry_count > SOLO_MAX_RETRIES {
-                drop(solo.take());
-                current_monitor = system_monitor.clone();
-                capture.switch(current_monitor.clone(), &running);
-                ui.source.target = CaptureTarget::System;
-                retry_count = 0;
-                reconnect_at = None;
-                notice = Some((
-                    format!("App source gone ({err}), back to system"),
-                    Instant::now(),
-                ));
-            } else {
-                let backoff = 500 * u64::from(retry_count.min(4) + 1);
-                reconnect_at = Some(Instant::now() + Duration::from_millis(backoff));
-                notice = Some((format!("Audio lost ({err}) - retrying..."), Instant::now()));
-            }
-        }
-        if let Some(at) = reconnect_at
-            && Instant::now() >= at
-            && running.load(Ordering::SeqCst)
-        {
-            capture.switch(current_monitor.clone(), &running);
-            reconnect_at = None;
-        }
-        if reconnect_at.is_none() && last_ok.elapsed() > Duration::from_secs(5) {
-            retry_count = 0;
-            last_ok = Instant::now();
-        }
+
+        // Health check and reconnect come first: a dead worker has to be
+        // replaced before this frame reads from an empty queue.
+        app.tick();
+
         let frame_start = Instant::now();
         // Clamp dt against resize/lag spikes so smoothing stays stable.
         let dt = frame_start
@@ -227,34 +119,24 @@ fn main() -> std::io::Result<()> {
         prev = frame_start;
 
         let (cols, rows) = terminal::size();
-        // Keep capacity ahead of very wide terminals to avoid reallocs.
-        let want = cols.saturating_mul(rows).saturating_mul(8).max(80 * 30);
-        if frame.capacity() < want {
-            frame.reserve(want - frame.capacity());
-        }
+        reserve_frame(&mut frame, cols, rows);
+
         // Paused freezes bars and peaks; dt keeps updating so resume is smooth.
-        // Symmetric layout mirrors half the bands around the center,
-        // left-to-right uses the full width directly.
         if !ui.paused {
             let display_fit = ui.theme.current.fit_bar_count(cols, dsp::MAX_BARS);
+            // Symmetric layout mirrors half the bands around the center,
+            // left-to-right uses the full width directly.
             let bar_count = match ui.layout.current {
-                layout::LayoutMode::Symmetric => layout::unique_count(display_fit),
-                layout::LayoutMode::LeftToRight => display_fit.max(1),
+                LayoutMode::Symmetric => layout::unique_count(display_fit),
+                LayoutMode::LeftToRight => display_fit.max(1),
             };
-            if !analyzer.update(capture.queue(), bar_count, dt, gain.value()) {
-                reconnect_at = Some(Instant::now() + Duration::from_millis(500));
-                notice = Some(("Audio queue lost - retrying...".to_string(), Instant::now()));
-            }
+            app.analyze(bar_count, dt);
         }
 
-        let use_color = !parsed.no_color;
-        let active_notice = match &notice {
-            Some((msg, at)) if at.elapsed() < NOTICE_TIME => Some(msg.as_str()),
-            _ => {
-                notice = None;
-                None
-            }
-        };
+        let view = app.view();
+        ui.source
+            .target
+            .label_into(view.system_label, &mut source_label);
         if ui.source.open {
             source::render(
                 &mut frame, cols, rows, &ui.source, ui.setup, use_color, &colors,
@@ -275,13 +157,12 @@ fn main() -> std::io::Result<()> {
             help::render_help(&mut frame, cols, rows, use_color, &colors);
         } else {
             let (bar_width, gap_width) = ui.theme.current.dims();
-            let system_label = system_monitor.as_deref().unwrap_or("mic/default");
-            let source_label = ui.source.target.label(system_label);
             visualizer::render_visualizer(
                 &mut frame,
+                &mut status,
                 &visualizer::Visualizer {
-                    bars: analyzer.bars(),
-                    peaks: analyzer.peaks(),
+                    bars: view.bars,
+                    peaks: view.peaks,
                     cols,
                     rows,
                     bar_width,
@@ -289,11 +170,11 @@ fn main() -> std::io::Result<()> {
                     use_color,
                     source: &source_label,
                     theme_name: ui.theme.current.name(),
-                    notice: active_notice,
+                    notice: view.notice,
                     color_mode: ui.color.current,
                     layout: ui.layout.current,
                     paused: ui.paused,
-                    gain: gain.value(),
+                    gain: view.gain,
                     colors: &colors,
                 },
             );
@@ -308,14 +189,25 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    drop(solo);
+    // Drop the session before saving: it moves the stream back on the way out.
+    let final_gain = app.gain();
+    drop(app);
     config::save(
         ui.theme.current,
         ui.color.current,
         ui.layout.current,
-        gain.value(),
-        &explicit_device,
+        final_gain,
+        &device,
     );
 
     Ok(())
+}
+
+/// Grows the frame buffer ahead of very wide terminals so a resize does not
+/// reallocate in the middle of a frame.
+fn reserve_frame(frame: &mut String, cols: usize, rows: usize) {
+    let want = cols.saturating_mul(rows).saturating_mul(8).max(80 * 30);
+    if frame.capacity() < want {
+        frame.reserve_exact(want);
+    }
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crossterm::event::KeyEvent;
 use serde::Deserialize;
 
-use crate::ui::{ChoiceMenu, MenuOutcome, choice_key, render_choice};
+use crate::ui::{Choice, ChoiceMenu, MenuOutcome, choice_key, render_choice};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ColorMode {
@@ -13,49 +13,19 @@ pub enum ColorMode {
     Mono,
 }
 
-impl ColorMode {
-    pub fn all() -> [ColorMode; 3] {
-        [ColorMode::Height, ColorMode::Frequency, ColorMode::Mono]
-    }
+impl Choice for ColorMode {
+    const ALL: &'static [ColorMode] = &[ColorMode::Height, ColorMode::Frequency, ColorMode::Mono];
+    const TABLE: &'static [(&'static str, &'static str)] = &[
+        ("Height", "gradient by bar height"),
+        ("Frequency", "gradient by frequency"),
+        ("Mono", "uniform color"),
+    ];
 
-    pub fn index(self) -> usize {
+    fn aliases(self) -> &'static [&'static str] {
         match self {
-            ColorMode::Height => 0,
-            ColorMode::Frequency => 1,
-            ColorMode::Mono => 2,
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            ColorMode::Height => ColorMode::Frequency,
-            ColorMode::Frequency => ColorMode::Mono,
-            ColorMode::Mono => ColorMode::Height,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            ColorMode::Height => "Height",
-            ColorMode::Frequency => "Frequency",
-            ColorMode::Mono => "Mono",
-        }
-    }
-
-    pub fn desc(self) -> &'static str {
-        match self {
-            ColorMode::Height => "gradient by bar height",
-            ColorMode::Frequency => "gradient by frequency",
-            ColorMode::Mono => "uniform color",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<ColorMode> {
-        match s.to_lowercase().as_str() {
-            "height" | "1" => Some(ColorMode::Height),
-            "frequency" | "freq" | "rainbow" | "2" => Some(ColorMode::Frequency),
-            "mono" | "white" | "3" => Some(ColorMode::Mono),
-            _ => None,
+            ColorMode::Frequency => &["freq", "rainbow"],
+            ColorMode::Mono => &["white"],
+            ColorMode::Height => &[],
         }
     }
 }
@@ -299,16 +269,18 @@ pub fn parse_color_str(s: &str) -> String {
 
 fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     let s = hex.strip_prefix('#')?;
+    // Byte slicing is only safe once the digits are known to be ASCII: a
+    // multibyte char would otherwise split a code point and panic.
+    if !s.is_ascii() {
+        return None;
+    }
     if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        Some((r, g, b))
+        let pair = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
+        Some((pair(0)?, pair(2)?, pair(4)?))
     } else if s.len() == 3 {
-        let r = u8::from_str_radix(&s[0..1], 16).ok()? * 17;
-        let g = u8::from_str_radix(&s[1..2], 16).ok()? * 17;
-        let b = u8::from_str_radix(&s[2..3], 16).ok()? * 17;
-        Some((r, g, b))
+        let digit = |i: usize| u8::from_str_radix(&s[i..i + 1], 16).ok();
+        // Short form: every digit is doubled (#abc -> #aabbcc).
+        Some((digit(0)? * 17, digit(1)? * 17, digit(2)? * 17))
     } else {
         None
     }
@@ -423,20 +395,12 @@ pub struct ColorMenu {
 }
 
 impl ColorMenu {
-    pub fn new() -> Self {
+    pub fn new(current: ColorMode) -> Self {
         Self {
-            current: ColorMode::default(),
-            selected: ColorMode::default().index(),
+            current,
+            selected: current.index(),
             open: false,
         }
-    }
-
-    pub fn with(current: ColorMode) -> Self {
-        let mut m = Self::new();
-        m.current = current;
-        m.selected = current.index();
-        m.open = false;
-        m
     }
 
     pub fn open(&mut self) {
@@ -449,9 +413,9 @@ impl ColorMenu {
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> MenuOutcome {
-        match choice_key(key, &mut self.selected, ColorMode::all().len()) {
+        match choice_key(key, &mut self.selected, ColorMode::ALL.len()) {
             MenuOutcome::Confirmed => {
-                self.current = ColorMode::all()[self.selected];
+                self.current = ColorMode::ALL[self.selected];
                 self.open = false;
                 MenuOutcome::Confirmed
             }
@@ -474,25 +438,20 @@ pub fn render(
     use_color: bool,
     colors: &ColorConfig,
 ) {
-    let modes = ColorMode::all();
-    let options: Vec<(String, bool)> = modes
-        .iter()
-        .map(|m| (format!("{}  [{}]", m.name(), m.desc()), *m == menu.current))
-        .collect();
-    let title = if setup {
-        "Setup 2/4 - Select bar color"
-    } else {
-        "Select bar color"
-    };
     render_choice(
         frame,
         cols,
         rows,
         &ChoiceMenu {
-            title,
-            options: &options,
+            title: if setup {
+                "Setup 2/4 - Select bar color"
+            } else {
+                "Select bar color"
+            },
+            options: ColorMode::TABLE,
+            current: menu.current.index(),
             selected: menu.selected,
-            quick_hint: "1 / 2 / 3 - quick select",
+            quick_hint: menu.current.quick_hint(),
             setup,
         },
         use_color,
@@ -516,6 +475,27 @@ mod tests {
         assert_eq!(parse_color_str("ansi: 208"), "\x1b[38;5;208m");
         assert_eq!(parse_color_str("bright-magenta"), "\x1b[95m");
         assert_eq!(parse_color_str("dark-gray"), "\x1b[90m");
+    }
+
+    #[test]
+    fn malformed_colors_fall_back_instead_of_panicking() {
+        // Wrong length, non-hex digits, and multibyte text of hex length all
+        // have to degrade to the default color.
+        for bad in [
+            "#",
+            "#12",
+            "#12345",
+            "#1234567",
+            "#gg0000",
+            "#00ff0g",
+            "#中abc",
+            "#ab中",
+            "#\u{1f600}\u{1f600}",
+        ] {
+            assert_eq!(parse_color_str(bad), "\x1b[95m", "{bad:?} must not panic");
+        }
+        assert_eq!(parse_hex_color("#0f0"), Some((0, 255, 0)));
+        assert_eq!(parse_hex_color("#ABCDEF"), Some((171, 205, 239)));
     }
 
     #[test]

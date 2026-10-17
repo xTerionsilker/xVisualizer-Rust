@@ -54,18 +54,17 @@ impl Analyzer {
             edges,
             bars: vec![0.0f32; MAX_BARS],
             caps: vec![0.0f32; MAX_BARS],
-            count: 0,
+            // One band until the first update, so a frame rendered before the
+            // analyzer ran (paused on the very first key) still draws a bar.
+            count: 1,
         }
     }
 
-    /// Returns false when the sample queue is gone and the app should stop.
-    pub fn update(
-        &mut self,
-        queue: &Mutex<VecDeque<f32>>,
-        bar_count: usize,
-        dt: f32,
-        gain: f32,
-    ) -> bool {
+    /// Fills bars and peaks from the newest `WINDOW` samples in `queue`.
+    ///
+    /// A poisoned lock is recovered instead of propagated: the queue only ever
+    /// holds plain samples, so a panic in the writer must not kill rendering.
+    pub fn update(&mut self, queue: &Mutex<VecDeque<f32>>, bar_count: usize, dt: f32, gain: f32) {
         let n_bars = bar_count.clamp(1, MAX_BARS);
         self.count = n_bars;
 
@@ -121,7 +120,6 @@ impl Analyzer {
                 self.caps[i] = (self.caps[i] - cap_fall).max(target).max(0.0);
             }
         }
-        true
     }
 
     pub fn bars(&self) -> &[f32] {

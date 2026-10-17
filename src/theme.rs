@@ -1,9 +1,6 @@
-use std::fmt::Write as _;
-
 use crossterm::event::KeyEvent;
 
-use crate::ui::{MenuOutcome, choice_key, step_wrap};
-use crate::util::{center_x, push_spaces};
+use crate::ui::{Choice, ChoiceMenu, MenuOutcome, choice_key, render_choice, step_wrap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Theme {
@@ -11,32 +8,23 @@ pub enum Theme {
     Solid,
 }
 
+impl Choice for Theme {
+    const ALL: &'static [Theme] = &[Theme::Classic, Theme::Solid];
+    const TABLE: &'static [(&'static str, &'static str)] = &[
+        ("Classic", "thin bars with gaps"),
+        ("Solid", "wide bars without gaps"),
+    ];
+
+    fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Theme::Solid => &["bold", "fat"],
+            Theme::Classic => &[],
+        }
+    }
+}
+
 impl Theme {
-    pub fn all() -> [Theme; 2] {
-        [Theme::Classic, Theme::Solid]
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            Theme::Classic => 0,
-            Theme::Solid => 1,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Theme::Classic => "Classic",
-            Theme::Solid => "Solid",
-        }
-    }
-
-    pub fn desc(self) -> &'static str {
-        match self {
-            Theme::Classic => "thin bars with gaps",
-            Theme::Solid => "wide bars without gaps",
-        }
-    }
-
+    /// `(bar width, gap width)` in terminal columns.
     pub fn dims(self) -> (usize, usize) {
         match self {
             Theme::Classic => (1, 1),
@@ -44,14 +32,7 @@ impl Theme {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Theme> {
-        match s.to_lowercase().as_str() {
-            "classic" | "1" => Some(Theme::Classic),
-            "solid" | "bold" | "fat" | "2" => Some(Theme::Solid),
-            _ => None,
-        }
-    }
-
+    /// How many bars fit in `cols` columns, capped at `max`.
     pub fn fit_bar_count(self, cols: usize, max: usize) -> usize {
         let (bar_w, gap_w) = self.dims();
         let cell = (bar_w + gap_w).max(1);
@@ -71,12 +52,11 @@ pub struct ThemeMenu {
 }
 
 impl ThemeMenu {
-    pub fn new(initial: Theme) -> Self {
-        // App starts with the setup wizard open (theme first).
+    pub fn new(current: Theme, open: bool) -> Self {
         Self {
-            current: initial,
-            selected: initial.index(),
-            open: true,
+            current,
+            selected: current.index(),
+            open,
         }
     }
 
@@ -86,19 +66,19 @@ impl ThemeMenu {
     }
 
     pub fn step(&mut self, dir: i32) {
-        step_wrap(&mut self.selected, dir, Theme::all().len());
+        step_wrap(&mut self.selected, dir, Theme::ALL.len());
     }
 
     pub fn quick(&mut self, idx: usize) {
-        if idx < Theme::all().len() {
-            self.current = Theme::all()[idx];
+        if let Some(t) = Theme::ALL.get(idx) {
+            self.current = *t;
         }
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> MenuOutcome {
-        match choice_key(key, &mut self.selected, Theme::all().len()) {
+        match choice_key(key, &mut self.selected, Theme::ALL.len()) {
             MenuOutcome::Confirmed => {
-                self.current = Theme::all()[self.selected];
+                self.current = Theme::ALL[self.selected];
                 self.open = false;
                 MenuOutcome::Confirmed
             }
@@ -121,106 +101,25 @@ pub fn render(
     use_color: bool,
     colors: &crate::color::ColorConfig,
 ) {
-    frame.clear();
-    let _ = write!(frame, "\x1b[H");
-    let lines = 7usize;
-    let mut top = rows.saturating_sub(lines) / 2;
-    for _ in 0..top {
-        frame.push_str("\x1b[K\r\n");
-    }
-    let title = if setup {
-        "Setup 1/4 - Select theme"
-    } else {
-        "Select theme"
-    };
-    let tx = center_x(cols, title.chars().count());
-    push_spaces(frame, tx);
-    if use_color {
-        frame.push_str(colors.title());
-    }
-    frame.push_str(title);
-    if use_color {
-        frame.push_str("\x1b[0m");
-    }
-    frame.push_str("\x1b[K\r\n");
-
-    let hint_top = "Up/Down or Left/Right - select  |  Enter - apply";
-    let hx = center_x(cols, hint_top.chars().count());
-    push_spaces(frame, hx);
-    if use_color {
-        frame.push_str(colors.hint());
-    }
-    frame.push_str(hint_top);
-    if use_color {
-        frame.push_str("\x1b[0m");
-    }
-    frame.push_str("\x1b[K\r\n\x1b[K\r\n");
-
-    for (idx, th) in Theme::all().iter().enumerate() {
-        let is_sel = idx == menu.selected;
-        let is_cur = *th == menu.current;
-        let preview = match th {
-            Theme::Classic => "blocks with gaps",
-            Theme::Solid => "joined blocks",
-        };
-        let marker = if is_sel { "> " } else { "  " };
-        let cur_tag = if is_cur { "  (current)" } else { "" };
-        let mid_a = " - ";
-        let mid_b = "  [";
-        let end_b = "]";
-        let w = marker.chars().count()
-            + th.name().chars().count()
-            + mid_a.chars().count()
-            + th.desc().chars().count()
-            + mid_b.chars().count()
-            + preview.chars().count()
-            + end_b.chars().count()
-            + cur_tag.chars().count();
-        let x = center_x(cols, w);
-        push_spaces(frame, x);
-        if is_sel {
-            if use_color {
-                frame.push_str("\x1b[7m");
+    render_choice(
+        frame,
+        cols,
+        rows,
+        &ChoiceMenu {
+            title: if setup {
+                "Setup 1/4 - Select theme"
             } else {
-                frame.push_str("> ");
-            }
-        }
-        frame.push_str(marker);
-        frame.push_str(th.name());
-        frame.push_str(mid_a);
-        frame.push_str(th.desc());
-        frame.push_str(mid_b);
-        frame.push_str(preview);
-        frame.push_str(end_b);
-        frame.push_str(cur_tag);
-        if is_sel && use_color {
-            frame.push_str("\x1b[0m");
-        }
-        frame.push_str("\x1b[K\r\n");
-    }
-
-    frame.push_str("\x1b[K\r\n");
-    let hint_bot = if setup {
-        "1 / 2 - quick select  |  Enter - next  |  Esc - skip setup  |  Q - quit"
-    } else {
-        "1 / 2 - quick select  |  Esc - back  |  Q - quit"
-    };
-    let bx = center_x(cols, hint_bot.chars().count());
-    push_spaces(frame, bx);
-    if use_color {
-        frame.push_str(colors.hint());
-    }
-    frame.push_str(hint_bot);
-    if use_color {
-        frame.push_str("\x1b[0m");
-    }
-    frame.push_str("\x1b[K");
-    // Clear any visualizer leftovers below the menu.
-    top += lines;
-    while top < rows {
-        frame.push_str("\r\n\x1b[K");
-        top += 1;
-    }
+                "Select theme"
+            },
+            options: Theme::TABLE,
+            current: menu.current.index(),
+            selected: menu.selected,
+            quick_hint: menu.current.quick_hint(),
+            setup,
+        },
+        use_color,
+        colors,
+    );
 }
 
 #[cfg(test)]
@@ -245,13 +144,43 @@ mod tests {
     }
 
     #[test]
+    fn bar_count_never_overflows_the_width() {
+        for cols in 1..=200usize {
+            for th in Theme::ALL {
+                let (bar_w, gap_w) = th.dims();
+                let n = th.fit_bar_count(cols, 64);
+                assert!((1..=64).contains(&n), "{th:?} at {cols} cols gave {n} bars");
+                let width = n * bar_w + n.saturating_sub(1) * gap_w;
+                // A bar may be wider than a 1-column terminal; the renderer
+                // clamps the drawn cells, so compare against that.
+                assert!(
+                    width <= cols.max(bar_w),
+                    "{th:?} at {cols} cols draws {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn theme_menu_renders_all_rows() {
         let mut frame = String::new();
-        let menu = ThemeMenu::new(Theme::Classic);
+        let menu = ThemeMenu::new(Theme::Classic, false);
         let colors = crate::color::ColorConfig::default();
         render(&mut frame, 80, 24, &menu, false, false, &colors);
         // Each rendered line (except the first) begins after a \r\n
         let line_count = frame.split("\r\n").count();
         assert_eq!(line_count, 24);
+        let plain = crate::util::strip_ansi(&frame);
+        assert!(plain.contains("thin bars with gaps"));
+        assert!(plain.contains("wide bars without gaps"));
+    }
+
+    #[test]
+    fn quick_select_ignores_out_of_range() {
+        let mut menu = ThemeMenu::new(Theme::Classic, false);
+        menu.quick(9);
+        assert_eq!(menu.current, Theme::Classic);
+        menu.quick(1);
+        assert_eq!(menu.current, Theme::Solid);
     }
 }

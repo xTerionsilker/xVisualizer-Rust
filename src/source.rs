@@ -1,11 +1,9 @@
-use std::fmt::Write as _;
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::ui::{MenuOutcome, UiEvent, choice_key};
-use crate::util::{center_x, push_spaces};
+use crate::ui::{Block, MenuOutcome, OptionRow, UiEvent, choice_key};
 
 #[derive(Clone, Debug)]
 pub struct PlaybackStream {
@@ -21,6 +19,16 @@ impl PlaybackStream {
             self.app.clone()
         } else {
             format!("{} - {}", self.app, self.stream)
+        }
+    }
+
+    /// Appends the label to `buf` (reused across frames) to keep the render
+    /// path free of per-frame allocations.
+    fn label_into(&self, buf: &mut String) {
+        buf.push_str(&self.app);
+        if !self.stream.is_empty() && self.stream != self.app {
+            buf.push_str(" - ");
+            buf.push_str(&self.stream);
         }
     }
 }
@@ -44,10 +52,18 @@ impl CaptureTarget {
         }
     }
 
-    pub fn label(&self, system_label: &str) -> String {
+    /// Writes the footer label into `buf` (reused across frames).
+    pub fn label_into(&self, system_label: &str, buf: &mut String) {
         match self {
-            CaptureTarget::System => system_label.to_string(),
-            CaptureTarget::Stream(s) => format!("app: {}", s.label()),
+            CaptureTarget::System => {
+                buf.clear();
+                buf.push_str(system_label);
+            }
+            CaptureTarget::Stream(s) => {
+                buf.clear();
+                buf.push_str("app: ");
+                s.label_into(buf);
+            }
         }
     }
 }
@@ -194,6 +210,27 @@ impl SourceMenu {
     }
 }
 
+/// Rows the full menu spends on chrome: title, hint, blank, `System`, blank,
+/// bottom hint (plus one more when the app list is empty).
+const CHROME_ROWS: usize = 6;
+/// Chrome kept when the terminal is too short for hints: title, `System`, bottom.
+const COMPACT_CHROME_ROWS: usize = 3;
+const HINT: &str = "Up/Down - select  |  Enter - capture  |  R - refresh";
+const NO_APPS: &str = "(no apps playing audio right now)";
+
+/// Visible slice of `apps` for `budget` rows, kept centered on the highlighted
+/// entry so a long list scrolls around the cursor instead of pushing the menu
+/// off the screen.
+fn visible_range(apps: usize, selected: usize, budget: usize) -> std::ops::Range<usize> {
+    let budget = budget.min(apps);
+    if apps <= budget {
+        return 0..apps;
+    }
+    let cursor = selected.saturating_sub(1).min(apps - 1);
+    let first = cursor.saturating_sub(budget / 2).min(apps - budget);
+    first..first + budget
+}
+
 pub fn render(
     frame: &mut String,
     cols: usize,
@@ -203,157 +240,82 @@ pub fn render(
     use_color: bool,
     colors: &crate::color::ColorConfig,
 ) {
-    frame.clear();
-    let _ = write!(frame, "\x1b[H");
     let current_input = match &menu.target {
         CaptureTarget::Stream(s) => Some(s.input),
         CaptureTarget::System => None,
     };
-
-    let total = menu.apps.len() + 6 + usize::from(menu.apps.is_empty());
-    let mut top = rows.saturating_sub(total) / 2;
-    for _ in 0..top {
-        frame.push_str("\x1b[K\r\n");
-    }
-    let title = if setup {
-        "Setup 4/4 - Select capture source"
+    let title: &[&str] = if setup {
+        &["Setup 4/4 - Select capture source"]
     } else {
-        "Select capture source"
+        &["Select capture source"]
     };
-    write_centered(frame, cols, title, use_color, colors.title(), true);
-    let hint = "Up/Down - select  |  Enter - capture  |  R - refresh";
-    write_centered(frame, cols, hint, use_color, colors.hint(), true);
-    frame.push_str("\x1b[K\r\n");
-    let ctx = OptionCtx {
-        cols,
-        total,
-        selected: menu.selected,
-        use_color,
+    let bottom: &[&str] = if setup {
+        &["Esc - skip setup  |  Q - quit"]
+    } else {
+        &["Esc - back  |  Q - quit"]
     };
-    write_option(
-        frame,
-        &ctx,
-        3,
-        0,
-        "System",
-        "everything you hear",
-        matches!(menu.target, CaptureTarget::System),
-    );
-    for (i, app) in menu.apps.iter().enumerate() {
-        write_option(
-            frame,
-            &ctx,
-            4 + i,
-            i + 1,
-            &app.app,
-            &app.stream,
-            current_input == Some(app.input),
-        );
-    }
-    let mut row = 4 + menu.apps.len();
-    if menu.apps.is_empty() {
-        let note = "(no apps playing audio right now)";
-        let x = center_x(cols, note.chars().count());
-        push_spaces(frame, x);
-        frame.push_str(note);
-        end_line(frame, total, row);
-        row += 1;
-    }
-    frame.push_str("\x1b[K\r\n");
-    row += 1;
-    debug_assert_eq!(row + 1, total);
-    let bottom = if setup {
-        "Esc - skip setup  |  Q - quit"
+    let empty_note = usize::from(menu.apps.is_empty());
+    // A terminal too short for the hints keeps only title, options and the
+    // bottom line, so the highlighted app stays reachable. In the extreme
+    // case the bottom hint gives up its row to the app list.
+    let compact = rows < CHROME_ROWS + empty_note + 1;
+    let chrome = if compact {
+        // Never more than the title plus one option row.
+        COMPACT_CHROME_ROWS.min(rows.saturating_sub(1))
     } else {
-        "Esc - back  |  Q - quit"
+        CHROME_ROWS + empty_note
     };
-    write_centered(frame, cols, bottom, use_color, colors.hint(), false);
-    // Clear any visualizer leftovers below the menu.
-    top += total;
-    while top < rows {
-        frame.push_str("\r\n\x1b[K");
-        top += 1;
-    }
-}
+    let window = visible_range(menu.apps.len(), menu.selected, rows.saturating_sub(chrome));
+    // title, [hint, blank], System, one row per visible app, [note], [blank], bottom
+    let lines = window.len() + chrome;
+    let last = lines - 1;
+    let system_row = if compact { 1 } else { 3 };
+    let app_row = system_row + 1;
 
-fn end_line(frame: &mut String, total: usize, idx: usize) {
-    if idx + 1 < total {
-        frame.push_str("\x1b[K\r\n");
-    } else {
-        frame.push_str("\x1b[K");
+    let mut block = Block::new(frame, lines, rows);
+    for r in 0..rows {
+        let Some(line) = block.row(r) else {
+            continue;
+        };
+        match line {
+            0 => block.centered(cols, title, use_color, colors.title()),
+            i if i == system_row => block.option(
+                cols,
+                &OptionRow {
+                    index: 0,
+                    selected: menu.selected,
+                    name: "System",
+                    detail: "everything you hear",
+                    current: current_input.is_none(),
+                },
+                use_color,
+            ),
+            1 if !compact => block.centered(cols, &[HINT], use_color, colors.hint()),
+            2 if !compact => {}
+            // App rows keep their absolute index, so the highlight follows the
+            // selection even when the list is windowed.
+            i if i >= app_row && i < app_row + window.len() => {
+                let idx = window.start + (i - app_row);
+                let app = &menu.apps[idx];
+                block.option(
+                    cols,
+                    &OptionRow {
+                        index: idx + 1,
+                        selected: menu.selected,
+                        name: &app.app,
+                        detail: &app.stream,
+                        current: current_input == Some(app.input),
+                    },
+                    use_color,
+                );
+            }
+            i if empty_note == 1 && i == app_row => {
+                block.centered(cols, &[NO_APPS], use_color, colors.hint());
+            }
+            i if i == last => block.centered(cols, bottom, use_color, colors.hint()),
+            _ => {}
+        }
     }
-}
-
-fn write_centered(
-    frame: &mut String,
-    cols: usize,
-    line: &str,
-    use_color: bool,
-    color: &str,
-    newline: bool,
-) {
-    let x = center_x(cols, line.chars().count());
-    push_spaces(frame, x);
-    if use_color {
-        frame.push_str(color);
-    }
-    frame.push_str(line);
-    if use_color {
-        frame.push_str("\x1b[0m");
-    }
-    // Title and hint lines are never the last row of this menu.
-    if newline {
-        frame.push_str("\x1b[K\r\n");
-    } else {
-        frame.push_str("\x1b[K");
-    }
-}
-
-struct OptionCtx {
-    cols: usize,
-    total: usize,
-    selected: usize,
-    use_color: bool,
-}
-
-fn write_option(
-    frame: &mut String,
-    ctx: &OptionCtx,
-    row: usize,
-    idx: usize,
-    name: &str,
-    detail: &str,
-    is_current: bool,
-) {
-    let marker: &str = if idx == ctx.selected { "> " } else { "  " };
-    let cur: &str = if is_current { "  (current)" } else { "" };
-    let sep: &str = if detail.is_empty() { "" } else { " - " };
-    let overhead = marker.chars().count() + sep.chars().count() + cur.chars().count();
-    let avail = ctx.cols.saturating_sub(overhead);
-    let (name_str, detail_str) = if name.chars().count() + detail.chars().count() > avail {
-        let name_limit = (avail / 3).max(10).min(name.chars().count());
-        let n = crate::util::truncate_chars(name, name_limit);
-        let d = crate::util::truncate_chars(detail, avail.saturating_sub(n.chars().count()));
-        (n, d)
-    } else {
-        (name, detail)
-    };
-    let w = overhead + name_str.chars().count() + detail_str.chars().count();
-    let x = center_x(ctx.cols, w);
-    push_spaces(frame, x);
-    let highlighted = idx == ctx.selected && ctx.use_color;
-    if highlighted {
-        frame.push_str("\x1b[7m");
-    }
-    frame.push_str(marker);
-    frame.push_str(name_str);
-    frame.push_str(sep);
-    frame.push_str(detail_str);
-    frame.push_str(cur);
-    if highlighted {
-        frame.push_str("\x1b[0m");
-    }
-    end_line(frame, ctx.total, row);
 }
 
 static SINK_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -525,5 +487,100 @@ Sink Input #550\n\
         assert_eq!(apps[0].input, 9);
         assert_eq!(apps[0].sink, 3);
         assert_eq!(apps[0].app, "late");
+    }
+
+    fn stream(input: u32, app: &str, title: &str) -> PlaybackStream {
+        PlaybackStream {
+            input,
+            sink: 0,
+            app: app.to_string(),
+            stream: title.to_string(),
+        }
+    }
+
+    #[test]
+    fn source_menu_fits_any_terminal_and_keeps_the_selection_visible() {
+        let colors = crate::color::ColorConfig::default();
+        let apps: Vec<PlaybackStream> = (0..12)
+            .map(|i| {
+                stream(
+                    i,
+                    &format!("app-{i}"),
+                    &format!("a fairly long track name {i}"),
+                )
+            })
+            .collect();
+        for (cols, rows) in [(80, 24), (60, 12), (30, 10), (20, 7), (20, 4), (14, 3)] {
+            for selected in [0, 5, 12] {
+                let menu = SourceMenu {
+                    target: CaptureTarget::System,
+                    apps: apps.clone(),
+                    selected,
+                    open: true,
+                };
+                let mut frame = String::new();
+                render(&mut frame, cols, rows, &menu, false, false, &colors);
+                let lines: Vec<String> = frame.split("\r\n").map(crate::util::strip_ansi).collect();
+                assert_eq!(
+                    lines.len(),
+                    rows,
+                    "{cols}x{rows} selected {selected}: {} lines",
+                    lines.len()
+                );
+                for line in &lines {
+                    assert!(
+                        line.chars().count() <= cols,
+                        "{cols}x{rows} row too wide: {line:?}"
+                    );
+                }
+                // Exactly one highlighted row, and it is the selected entry.
+                let marks = lines
+                    .iter()
+                    .filter(|l| l.trim_start().starts_with('>'))
+                    .count();
+                assert_eq!(marks, 1, "{cols}x{rows} selected {selected}");
+                if selected > 0 {
+                    let name = apps[selected - 1].app.clone();
+                    assert!(
+                        lines
+                            .iter()
+                            .any(|l| { l.trim_start().starts_with('>') && l.contains(&name) }),
+                        "selection {name} scrolled out of view at {cols}x{rows}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_source_list_explains_itself() {
+        let colors = crate::color::ColorConfig::default();
+        let menu = SourceMenu::new();
+        let mut frame = String::new();
+        render(&mut frame, 80, 24, &menu, false, false, &colors);
+        assert!(frame.contains("no apps playing audio right now"));
+        assert_eq!(frame.split("\r\n").count(), 24);
+    }
+
+    #[test]
+    fn window_stays_inside_the_list() {
+        for apps in 0..20usize {
+            for selected in 0..=apps {
+                for budget in 0..20usize {
+                    let w = visible_range(apps, selected, budget);
+                    assert!(
+                        w.start <= w.end && w.end <= apps,
+                        "{w:?} for {apps}/{selected}"
+                    );
+                    if !w.is_empty() {
+                        let cursor = selected.saturating_sub(1);
+                        assert!(
+                            (w.start..w.end).contains(&cursor),
+                            "cursor {cursor} outside {w:?} ({apps} apps, {budget} rows)"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -105,7 +105,8 @@ xvisualizer/
 ├── colors.json            # Default palette, overridable at runtime
 ├── AGENTS.md              # Conventions and gotchas for contributors
 └── src/
-    ├── main.rs         # Entrypoint and orchestration: frame loop, reconnect policy, screen dispatch
+    ├── main.rs         # Entrypoint: argument/config resolution, terminal setup, frame loop
+    ├── app.rs          # Runtime session: capture worker, solo rerouting, notices, reconnect policy
     ├── args.rs         # Zero-dependency CLI parser, help text, exit codes
     ├── audio.rs        # PulseAudio capture worker, monitor auto-detection, RATE/WINDOW/READ_FRAMES
     ├── source.rs       # pactl stream discovery, source menu, SoloSession null-sink rerouting
@@ -114,18 +115,21 @@ xvisualizer/
     ├── config.rs       # Settings persistence at $XDG_CONFIG_HOME/xvisualizer/config
     ├── theme.rs        # Classic/Solid geometry, bar-count fitting, theme menu
     ├── layout.rs       # Symmetric/Left-Right mapping math, layout menu
-    ├── ui.rs           # UiState composition root, UiEvent/MenuOutcome, shared option-list screen
+    ├── ui.rs           # UiState composition root, UiEvent/MenuOutcome, Choice trait, shared menu screen
     ├── input.rs        # Non-blocking key polling, global keys, setup-wizard chaining
     ├── visualizer.rs   # Spectrum frame assembler, peak rows, footer and key reminder
     ├── help.rs         # Full-screen keybind overlay
     ├── terminal.rs     # TerminalGuard RAII: alternate screen, raw mode, cursor, size
-    └── util.rs         # Gain tracker, char-safe truncation, centering helpers
+    └── util.rs         # Gain tracker, char-safe truncation, centering, ANSI row helpers
 ```
 
-Three invariants carry most of the weight:
+Five invariants carry most of the weight:
 
-- **One domain per file, state included.** A feature's state, its key handling, and its rendering live together (`theme.rs`, `layout.rs`, `color.rs`, `source.rs`). `main` owns the composition (`UiState`) and passes plain values down; no other module reaches into a sibling's fields.
-- **Menus return requests, not side effects.** `handle_key` returns a `MenuOutcome` and an optional `UiEvent`; only `main` mutates capture state or restarts the worker. Key handling stays testable and PulseAudio stays out of `ui.rs`.
+- **One domain per file, state included.** A feature's state, its key handling, and its rendering live together (`theme.rs`, `layout.rs`, `color.rs`, `source.rs`). No other module reaches into a sibling's fields.
+- **`main` is a loop, `app` is a session.** `main.rs` resolves flags, enters the terminal and drives poll → `app.tick()` → analyze → render → write. Everything that touches PulseAudio at runtime (capture worker, solo rerouting, gain, notices, reconnect policy) lives in `app.rs` behind `App::select` / `App::tick` / `App::view`. The policy itself (`app::Retry`) is pure and driven by an explicit `Instant`, so it is unit-tested without a sound server.
+- **One table per option set.** `Theme`, `ColorMode` and `LayoutMode` declare `ALL` plus a `(name, detail)` `TABLE` and implement `ui::Choice`, which derives `index`, `next`, `name`, `from_str` and the `1 / N - quick select` hint. Labels, CLI parsing and quick-select keys cannot drift apart.
+- **A frame is exactly `rows` rows.** Screens draw through `ui::Block`: it reserves the block height and then emits one row per terminal line, clipping whatever does not fit. Menus that are taller than the window scroll around the cursor instead of pushing themselves off-screen, and every text row is truncated to `cols`, so a wrapped row (which would scroll the screen at 120 Hz) is impossible.
+- **Menus return requests, not side effects.** `handle_key` returns a `MenuOutcome` and an optional `UiEvent`; only `app.rs` mutates capture state or restarts the worker. Key handling stays testable and PulseAudio stays out of `ui.rs`.
 - **Capture is restartable, not restart-prone.** `CaptureSession::switch()` joins the old worker, *then* clears the queue, *then* spawns the replacement — in that order, because reusing a queue without clearing it plays stale audio. Errors travel through a shared `Option<String>` slot, so a dead device degrades instead of exiting.
 
 `AGENTS.md` documents these rules and the coupled constants (frame timing, DSP parameters, chunk sizes) for future contributors.
@@ -180,19 +184,19 @@ When an application is selected from the `S` source menu or via `--source <name>
 2. The application's `sink-input` is moved into that sink. If this fails, the module is unloaded immediately and the session returns an error.
 3. A `module-loopback` (50 ms) routes `xviz_cap_*.monitor` back to the application's original sink, so playback stays audible. This step is best effort: if it fails, capture still works and the footer says the app is muted.
 4. The capture worker is switched to the private monitor through `CaptureSession::switch()`.
-5. On switch, quit, or panic, `Drop for SoloSession` moves the stream back to its original sink and unloads both modules.
+5. On switch, quit, or panic, `Drop for SoloSession` moves the stream back to its original sink and unloads both modules. The session is owned by `app::App` for as long as the capture is active, so it is never dropped early while its monitor is being recorded.
 
-If the source dies later, `main` retries the same device with backoff and, after more than five consecutive failures, drops the session and returns to the system mix.
+If the source dies later, `app::tick` retries the same device with backoff and, after more than five consecutive failures, drops the session and returns to the system mix. A streak is only forgotten once the new worker has stayed alive for two seconds, so a device that comes back is not written off after a few unlucky attempts.
 
 ### Rendering Pipeline
 
 ↑ [Table of Contents](#table-of-contents)
 
-1. **Key drain**: `input::poll_keys` reads every pending key with a zero-timeout `poll`, so a fast burst is applied in full and the render loop is never blocked. `Release` and `Repeat` events are ignored.
-2. **Health check and reconnect**: a pending worker error is taken from the shared slot, the backoff timer is scheduled (500 ms × up to 5), and the solo-to-system fallback is decided here.
+1. **Key drain**: `input::poll_keys` reads every pending key with a zero-timeout `poll` into a buffer reused across frames, so a fast burst is applied in full and the render loop is never blocked. `Release` and `Repeat` events are ignored.
+2. **Health check and reconnect**: `app::tick` takes a pending worker error from the shared slot, schedules the backoff (500 ms × up to 5), resets the streak once a worker proves itself, and decides the solo-to-system fallback.
 3. **Timing and sizing**: `dt` is measured and clamped to `0.001–0.05 s`; the terminal size is read and the frame buffer is grown ahead of very wide windows so a resize does not trigger a reallocation mid-frame.
 4. **Analysis**: while unpaused, the bar count is solved from the theme and layout, and `Analyzer::update` refreshes bars and peaks. Pausing keeps the loop and `dt` alive, so resuming is seamless.
-5. **Screen dispatch**: the first open screen wins — source, theme, color, layout, help — otherwise the visualizer frame is assembled. Bar heights and peak rows are computed on fixed-size stack arrays, so no per-frame heap allocation happens in the hot path.
+5. **Screen dispatch**: the first open screen wins — source, theme, color, layout, help — otherwise the visualizer frame is assembled. Bar heights and peak rows are computed on fixed-size stack arrays, and the status line is built into a reused buffer, so no per-frame heap allocation happens in the hot path.
 6. **Atomic write**: the whole frame, including `ESC[H` and one `ESC[K` per row, is written with a single `write_all` + `flush`. The loop then sleeps out the remainder of the 1/120 s budget.
 
 ---
@@ -209,10 +213,11 @@ If the source dies later, `main` retries the same device with backoff and, after
 | 2. Extreme-width clamp | Even the computed count does not fit (very narrow panes). | A shrink loop reduces the count one step at a time down to a single bar. |
 | 3. Symmetric parity | The fitted width is even. | One bar is dropped so the mirror stays centered on an exact half. |
 | 4. Footer removal | The terminal is only one row tall. | The key-reminder line is dropped; the status line remains. |
-| 5. Text truncation | The status line, notice, or key reminder exceeds the width. | `truncate_chars` cuts on char boundaries, so UTF-8 is never split mid-codepoint. |
-| 6. Size-query failure | The terminal size cannot be read. | Rendering falls back to 80×24. |
-| 7. Capture retry | The device stops delivering samples. | The same device is retried with backoff while the app keeps running. |
-| 8. Solo fallback | A solo source fails repeatedly (app closed, device gone). | The session is dropped, the stream is restored, and the system mix takes over. |
+| 5. Text truncation | The status line, notice, menu row, or key reminder exceeds the width. | `truncate_chars` cuts on char boundaries, so UTF-8 is never split mid-codepoint. The status line is built in a reused buffer, so no row is ever longer than the terminal. |
+| 6. Menu clipping | A menu block is taller than the terminal. | `ui::Block` clips the block and pads the rest, so the frame stays exactly `rows` rows. The source menu first shrinks its app list around the highlighted entry, then drops the hint rows; a one-row source terminal gives its last row to the app list. |
+| 7. Size-query failure | The terminal size cannot be read. | Rendering falls back to 80×24. |
+| 8. Capture retry | The device stops delivering samples. | The same device is retried with backoff while the app keeps running. |
+| 9. Solo fallback | A solo source fails repeatedly (app closed, device gone). | The session is dropped, the stream is restored, and the system mix takes over. |
 
 That is why `xvisualizer` on a stock 80×24 terminal renders a full-width spectrum instead of wrapping or scrolling: the bar count is a function of the window, not a constant, and every text row is truncated rather than allowed to overflow.
 
@@ -631,10 +636,12 @@ cargo fmt --check \
 
 - **CLI parsing** (`args.rs`): long, short, and equals syntax; numeric theme aliases; `NO_COLOR`; and every rejection path (unknown flag, unknown value, missing value, out-of-range gain).
 - **Settings round-trip** (`config.rs`): save → load equality, missing files, and silently ignored malformed lines.
-- **Color parsing** (`color.rs`): hex, 3-digit shorthand, named and bright ANSI names, dashed spellings, `ansi:N` indices, `bold` prefixes, full JSON schema, thresholdless gradients, and color resolution by ratio.
-- **Layout math** (`layout.rs`): mirror counts, center-is-bass mapping, and single-band clamping.
-- **Geometry and bounds** (`theme.rs`, `visualizer.rs`, `help.rs`): bar counts at 80, 40, 30, and 3 columns; a rendered frame never exceeds the terminal row count; the help overlay's options share one left edge.
-- **Pure helpers** (`util.rs`, `input.rs`): gain clamping, char-boundary truncation, centering overflow.
+- **Color parsing** (`color.rs`): hex, 3-digit shorthand, named and bright ANSI names, dashed spellings, `ansi:N` indices, `bold` prefixes, full JSON schema, thresholdless gradients, color resolution by ratio, and malformed (including non-ASCII) color strings degrading to the default instead of panicking.
+- **Option tables** (`ui.rs`): `Choice::from_str` round trips for every variant, alias and numeric spelling; the quick-select hint is derived from the option count; one option row carries exactly one `>` marker with and without color.
+- **Reconnect policy** (`app.rs`): the backoff grows 0.5 s → 2.5 s and plateaus, a retry fires only after its deadline (and only once), a solo source gives up after five consecutive failures while the system mix is retried forever, and a worker that stays alive forgets the streak while one that keeps dying does not.
+- **Layout math** (`layout.rs`): mirror counts, center-is-bass mapping, single-band clamping, and the mirror never indexing outside the band range.
+- **Geometry and bounds** (`theme.rs`, `ui.rs`, `source.rs`, `visualizer.rs`, `help.rs`): bar counts and drawn widths over 1–200 columns; every rendered frame and every menu screen emits exactly `rows` rows and no row wider than `cols`; the highlighted source stays visible in a windowed list; the help overlay's options share one left edge.
+- **Pure helpers** (`util.rs`, `input.rs`): gain clamping, char-boundary truncation, centering overflow, width budgets shared between centering and printing.
 
 `cargo test source` runs the audio-independent subset as a fast smoke test. There is no mock for PulseAudio: live capture, solo rerouting, and terminal rendering must be verified on a machine with a running sound stack — see the [gotchas in `AGENTS.md`](AGENTS.md) before touching timing constants.
 

@@ -12,11 +12,16 @@ enum Action {
     Emit(UiEvent),
 }
 
-/// Drains pending keys without blocking the frame loop.
+/// Drains pending keys without blocking the frame loop and appends the
+/// resulting requests to `events` (cleared first, reused across frames).
 ///
 /// In raw mode Ctrl+C arrives as a key event, not SIGINT.
-pub fn poll_keys(state: &mut UiState, running: &AtomicBool) -> Vec<UiEvent> {
-    let mut events = Vec::new();
+pub fn poll_keys<'a>(
+    state: &mut UiState,
+    running: &AtomicBool,
+    events: &'a mut Vec<UiEvent>,
+) -> &'a [UiEvent] {
+    events.clear();
     while event::poll(Duration::from_millis(0)).unwrap_or(false) {
         let Ok(Event::Key(key)) = event::read() else {
             continue;

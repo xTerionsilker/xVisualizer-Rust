@@ -80,9 +80,15 @@ impl CaptureSession {
         &self.queue
     }
 
+    /// False once the worker thread gave up, which is the signal that the
+    /// device is gone and the session has to be restarted.
+    pub fn worker_alive(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
     /// Takes a pending capture error left by a dead worker, if any.
     pub fn take_error(&self) -> Option<String> {
-        self.error.lock().ok()?.take()
+        self.error.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     /// Stops the worker, drops stale audio, and captures `monitor` instead.

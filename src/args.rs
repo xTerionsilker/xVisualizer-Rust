@@ -1,6 +1,7 @@
 use crate::color::ColorMode;
 use crate::layout::LayoutMode;
 use crate::theme::Theme;
+use crate::ui::Choice;
 
 pub struct Args {
     pub device: Option<String>,
