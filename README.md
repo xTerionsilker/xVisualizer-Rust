@@ -273,8 +273,8 @@ In `Symmetric` mode the analyzer is asked for `ceil(fit / 2)` bands and the rend
 Clone the repository and build the optimized binary:
 
 ```bash
-git clone https://github.com/xTerionsilker/xvisualizer-rust.git
-cd xvisualizer-rust
+git clone https://github.com/xTerionsilker/xVisualizer-Rust.git
+cd xVisualizer-Rust
 cargo build --release
 ```
 
@@ -676,7 +676,7 @@ cargo uninstall xvisualizer
 If it was built from source, simply remove the working copy:
 
 ```bash
-rm -rf /path/to/xvisualizer-rust
+rm -rf /path/to/xVisualizer-Rust
 ```
 
 Delete the optional user files by hand if you want a clean slate:
