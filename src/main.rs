@@ -6,7 +6,6 @@ mod dsp;
 mod help;
 mod input;
 mod layout;
-mod solo;
 mod source;
 mod terminal;
 mod theme;
@@ -20,8 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::solo::SoloSession;
-use crate::source::CaptureTarget;
+use crate::source::{CaptureTarget, SoloSession};
 use crate::ui::{UiEvent, UiState};
 
 const NOTICE_TIME: Duration = Duration::from_secs(4);
